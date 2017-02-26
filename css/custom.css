@@ -1,0 +1,6 @@
+@font-face {
+  font-family: 'Tintin';
+  src: url("../assets/fonts/tintin.ttf");
+}
+
+a.site-title { font-family: 'Tintin'; }

@@ -1,0 +1,239 @@
+---
+layout: post
+title: "Matrix traversals and unification"
+date: 2013-12-12 00:00:00 -0700
+comments: true
+categories:
+---
+
+While playing with Conor McBride’s material for his summer school on dependently-typed metaprogramming, I was puzzled as to how easy it was to implement matrix transposition. I will detail here what goes on, as I find the insight slightly amusing.
+
+First, some boilerplate code:
+
+{% highlight haskell %}
+module TraverseId where
+
+open import Data.Nat
+open import Function
+{% endhighlight %}
+
+We define standard length-indexed lists (usually named vectors), and related operations.
+
+{% highlight haskell %}
+data Vec (X : Set) : ℕ → Set where
+  ◇   :                         Vec X zero
+  _,_ : {n : ℕ} → X → Vec X n → Vec X (suc n)
+
+vec : ∀ {n X} → X → Vec X n
+vec {zero}  x = ◇
+vec {suc n} x = x , vec x
+
+vapp : ∀ {n S T} → Vec (S → T) n → Vec S n → Vec T n
+vapp ◇        ◇        = ◇
+vapp (f , fs) (x , xs) = f x , vapp fs xs
+{% endhighlight %}
+
+We now define applicative functors, along with two instances for the identity functor and the fixed-sized vector functor (you can think of it as a finite tabulation).
+
+{% highlight haskell %}
+{% raw %}
+record Applicative (F : Set → Set) : Set1 where
+  infixl 2 _⟨⋆⟩_
+  field
+    pure  : ∀ {X} → X → F X
+    _⟨⋆⟩_ : ∀ {S T} → F (S → T) → F S → F T
+open Applicative {{...}} public
+
+applicativeVec  : ∀ {n} → Applicative (λ X → Vec X n)
+applicativeVec  = record { pure = vec; _⟨⋆⟩_ = vapp }
+
+applicativeId : Applicative id
+applicativeId = record { pure = id; _⟨⋆⟩_ = id }
+{% endraw %}
+{% endhighlight %}
+
+We then proceed to define the traversable interface.
+
+{% highlight haskell %}
+{% raw %}
+record Traversable (F : Set → Set) : Set1 where
+  field
+    traverse : ∀ {G S T} {{AG : Applicative G}} →
+               (S → G T) → F S → G (F T)
+open Traversable {{...}} public
+{% endraw %}
+{% endhighlight %}
+
+You can try to think of traverse’s signature in these terms: given a G-effectful action transforming an element of S into an element of T, and a F-structure containing some elements of S, we can compute a G-effectful action building up a F-structure of elements of T. In some sense, we map the action into the structure, and then we fold the structure of actions into a structure of results.
+
+Vectors of a given size are traversable:
+
+{% highlight haskell %}
+{% raw %}
+traversableVec : {n : ℕ} → Traversable (λ X → Vec X n)
+traversableVec = record { traverse = vtr } where
+  vtr : ∀ {n G S T} {{_ : Applicative G}} →
+               (S → G T) → Vec S n → G (Vec T n)
+  vtr        f ◇         = pure ◇
+  vtr {{aG}} f (s , ss)  = pure {{aG}} _,_ ⟨⋆⟩ f s ⟨⋆⟩ vtr f ss
+{% endraw %}
+{% endhighlight %}
+
+The given exercise at this point in the course was to implement matrix transposition. It was heavily hinted that this would be implemented as a traversal, so I let myself be guided by the types, and write the following, where the question mark stands for a hole, a placeholder for a term that you do not want to write yet:
+
+{% highlight haskell %}
+transpose : ∀ {m n X} → Vec (Vec X m) n → Vec (Vec X n) m
+transpose = traverse ?
+{% endhighlight %}
+
+At that point, the type of the hole (the expected type of the term to be filled in place of the hole) was the following:
+
+{% highlight haskell %}
+Goal: Vec .X .m → Vec .X .m
+{% endhighlight %}
+
+Well, do I have just the right candidate for that type! Even Agsy, the automated program search tool shipped with Agda, knows what to put in that hole!
+
+{% highlight haskell %}
+transpose : ∀ {m n X} → Vec (Vec X m) n → Vec (Vec X n) m
+transpose = traverse id
+{% endhighlight %}
+
+At that point though, the doubt builds in my mind. It seems to me that a traversal with the ineffectful identity function should just give me back the same structure I started with... Yet given the type of transpose, it definitely modifies the shape of the input structure. And at such a polymorphic type, with such a generic implementation, there’s only so much it can be doing! How does it work!?
+
+Before trying to solve that question, I wonder whether I could implement the identity function as a matrix traversal... Again, being type-directed:
+
+{% highlight haskell %}
+matrixId : ∀ {m n X} → Vec (Vec X m) n → Vec (Vec X m) n
+matrixId = traverse ?
+{% endhighlight %}
+
+Can you guess the type of the hole? :-)
+
+{% highlight haskell %}
+Goal: Vec .X .m → Vec .X .m
+{% endhighlight %}
+
+And indeed, here comes the implementation:
+
+{% highlight haskell %}
+matrixId : ∀ {m n X} → Vec (Vec X m) n → Vec (Vec X m) n
+matrixId = traverse id
+{% endhighlight %}
+
+Sounds familiar? Indeed, to implement matrix transposition and matrix identity, I wrote the exact same code! So something must be happening under the covers, at the level of implicit arguments.
+
+Let’s play the part of the unification algorithm with our two toy functions. Recall the full polymorphic type of traverse:
+
+{% highlight haskell %}
+{% raw %}
+traverse : ∀ {F : Set → Set}{G S T}{{AG : Applicative G}} →
+                  (S → G T) → F S → G (F T)
+{% endraw %}
+{% endhighlight %}
+
+So, by unification (the question-marked variables are now unification variables in scope):
+
+{% highlight haskell %}
+-- by applying to id, ?S is unified with ?G ?T, therefore substituted
+traverse id : (?G ?T → ?G ?T) → ?F (?G ?T) → ?G (?F ?T)
+{% endhighlight %}
+
+For our two examples, we ascribe the following type signatures:
+
+{% highlight haskell %}
+-- transpose
+traverse id : Vec (Vec X m) n → Vec (Vec X n) m
+
+-- matrixId
+traverse id : Vec (Vec X m) n → Vec (Vec X m) n
+{% endhighlight %}
+
+The following unification problems are to be solved:
+
+{% highlight haskell %}
+-- transpose
+?F ?S → ?G (?F ?T) ≙ Vec (Vec X m) n → Vec (Vec X n) m
+
+-- matrixId
+?F ?S → ?G (?F ?T) ≙ Vec (Vec X m) n → Vec (Vec X m) n
+{% endhighlight %}
+
+This gives rise to the following unification equations:
+
+{% highlight haskell %}
+-- transpose
+?F (?G ?T) ≙ Vec (Vec X m) n
+?G (?F ?T) ≙ Vec (Vec X n) m
+
+-- matrixId
+?F (?G ?T) ≙ Vec (Vec X n) m
+?G (?F ?T) ≙ Vec (Vec X n) m
+{% endhighlight %}
+
+And here are the potential solutions:
+
+{% highlight haskell %}
+-- transpose
+1: ?T = X ; ?F = λ S → Vec S n ; ?G = λ S → Vec S m
+
+-- matrixId
+1: ?T = X ; ?F = λ S → Vec (Vec S n) m ; ?G = id
+
+2: ?T = X ; ?F = id ; ?G = λ S → Vec (Vec S n) m
+{% endhighlight %}
+
+However, another additional constraint, namely the implicit instance argument that requires ? G to be an applicative functor, prevents the second equation from being solved, as we did not provide a way for Agda to build nested instances.
+
+The mystery is therefore solved: even though we wrote the same code, the implicit arguments have been inferred, type-directed by the unification, to be different. In the case of matrix transposition, the F-structure is the outermost vector layer, and the G-effect is the innermost vector layer. In the case of matrix identity, the entire matrix is the F-structure, and the G-effect is identity. It makes sense then, that traversing with no effect and the identity function preserves the matrix completely.
+
+One may now wonder how come traversing a vector with a vector effect effectively transposes the entire structure, seen as a matrix. It is actually fairly simple once you start unfolding the definitions:
+
+{% highlight haskell %}
+-- note that (1 , 2) stands for (1 , 2 , ◇), for simplicity and brevity
+  traverse id ((1 , 2) , (3 , 4) , (5 , 6))
+-- unfolding traverse for F = λ S → Vec S 3, that is unfolding traverseVec
+= pure _,_ ⟨⋆⟩ id (1 , 2) ⟨⋆⟩ vtr id ((3 , 4) , (5 , 6))
+-- repeatedly unfolding recursive calls to vtr
+= pure _,_ ⟨⋆⟩ id (1 , 2) ⟨⋆⟩
+  (pure _,_ ⟨⋆⟩ id (3 , 4) ⟨⋆⟩
+  (pure _,_ ⟨⋆⟩ id (5 , 6) ⟨⋆⟩ pure ◇))
+-- unfolding id...
+= pure _,_ ⟨⋆⟩ (1 , 2) ⟨⋆⟩ (
+  pure _,_ ⟨⋆⟩ (3 , 4) ⟨⋆⟩ (
+  pure _,_ ⟨⋆⟩ (5 , 6) ⟨⋆⟩ pure ◇
+  ))
+-- unfolding pure, with the applicative instance for G = λ S → Vec S 2
+= ((_,_) , (_,_)) ⟨⋆⟩ (1 , 2) ⟨⋆⟩ (((_,_) , (_,_)) ⟨⋆⟩ (3 , 4)
+  ⟨⋆⟩ (((_,_) , (_,_)) ⟨⋆⟩ (5 , 6) ⟨⋆⟩ (◇ , ◇)))
+-- the applicative application performs position-wise function application
+= ((1 , _) , (2 , _)) ⟨⋆⟩ (((3 , _) , (4 , _)) ⟨⋆⟩ (((5 , _) , (6 , _)) ⟨⋆⟩ (◇ , ◇)))
+= (1,_ , 2,_) ⟨⋆⟩ ((3 ,_ , 4 ,_) ⟨⋆⟩ ((5) , (6)))
+= (1,_ , 2,_) ⟨⋆⟩ ((3 , 5) , (4 , 6))
+= ((1 , 3 , 5) , (2 , 4 , 6))
+{% endhighlight %}
+
+All in all, matrix transposition is not implemented as a matrix traversal, but as a vector traversal with a column-building effect!
+
+Finally, here is how it goes for matrix identity:
+
+{% highlight haskell %}
+  traverse id ((1 , 2) , (3 , 4) , (5 , 6))
+-- unfolding traverse for F = λ S → Vec (Vec S 2) 3, that is unfolding traverseVec
+= pure _,_ ⟨⋆⟩ id (1 , 2) ⟨⋆⟩ vtr id ((3 , 4) , (5 , 6))
+-- repeatedly unfolding recursive calls to vtr
+= pure _,_ ⟨⋆⟩ id (1 , 2) ⟨⋆⟩
+  (pure _,_ ⟨⋆⟩ id (3 , 4) ⟨⋆⟩
+  (pure _,_ ⟨⋆⟩ id (5 , 6) ⟨⋆⟩ pure ◇))
+-- unfolding id...
+= pure _,_ ⟨⋆⟩ (1 , 2) ⟨⋆⟩ (
+  pure _,_ ⟨⋆⟩ (3 , 4) ⟨⋆⟩ (
+  pure _,_ ⟨⋆⟩ (5 , 6) ⟨⋆⟩ pure ◇
+  ))
+-- unfolding pure, with the applicative instance for G = id
+= _,_ ⟨⋆⟩ (1 , 2) ⟨⋆⟩ (_,_ ⟨⋆⟩ (3 , 4) ⟨⋆⟩ (_,_ ⟨⋆⟩ (5 , 6) ⟨⋆⟩ ◇))
+-- the applicative application performs just function application
+= (1 , 2),_ ⟨⋆⟩ ((3 , 4),_ ⟨⋆⟩ (5 , 6))
+= (1 , 2),_ ⟨⋆⟩ ((3 , 4) , (5 , 6))
+= (1 , 2) , (3 , 4) , (5 , 6)
+{% endhighlight %}
