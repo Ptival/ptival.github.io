@@ -4,8 +4,14 @@ layout: default
 <div class="home">
 	<section class="site-header">
 		<h1 class="smallcap"><a class="site-title" href="{{ '/' | prepend: site.baseurl | prepend: site.url }}">{{ site.title }}</a></h1>
-		{% include nav.html %}
-		{% include intro.html %}
+		<h1 class="smallcap"><a class="site-title" href="{{ site.baseurl }}/">{{ site.title }}</a></h1>
+		<p>I am <a href="http://cseweb.ucsd.edu/~vrobert/">Valentin Robert</a>, a PhD student at University of California, San Diego.</p>
+		<p>This blog is most likely about functional programming and formal verification.</p>
+		<a href="https://github.com/Ptival"><i class="fa fa-2x fa-github-alt"></i></a>
+		&nbsp;
+		<a href="http://stackoverflow.com/users/553003/ptival"><i class="fa fa-2x fa-stack-overflow"></i></a>
+		&nbsp;
+		<a href="https://twitter.com/Ptival"><i class="fa fa-2x fa-twitter"></i></a>
 	</section>
 	<section>
 		<ul class="post-list">

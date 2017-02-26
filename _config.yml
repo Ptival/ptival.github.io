@@ -1,21 +1,23 @@
 # Site settings
-title: "TextLog"
+title: Coq en Stock
 description: "Minimalist Jekyll theme for documentation site"
-baseurl: "/textlog" # required if used under gh-pages branch, else (under master branch) just leave empty/blank
-url: ""
+baseurl: "" # required if used under gh-pages branch, else (under master branch) just leave empty/blank
+url: "" # default is empty
 author: "John Doe"
 
 # Build settings
 kramdown:
   input: GFM
+  hard_wrap: false
 permalink: pretty
 
 # Third-party services
 # just leave empty to disable it
 google_analytics:
-disqus_shortname: 
+disqus_shortname: coqenstock
 
 plugins:
   - jekyll-sitemap
 
 exclude: ["LICENSE", "README.md", "CNAME", "vendor", "Gemfile", "script"]
+
