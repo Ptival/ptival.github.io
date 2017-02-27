@@ -116,7 +116,7 @@ table =
 
 {% endhighlight %}
 
-Now consider the following dependently-typed language:
+Now, I was trying to build the following dependently-typed language:
 
 {% highlight haskell %}
 
@@ -130,7 +130,7 @@ data Term
 
 {% endhighlight %}
 
-If you wanted to introduce the notation `τ1 → τ2`, standing for `Pi "" τ1 τ2`, where the empty string indicates the non-binding, you might consider putting it in an operator table with right-associativity, and you would end up with something like:
+and I wanted to introduce the notation `τ1 → τ2`, standing for `Pi "" τ1 τ2`, where the empty string indicates the non-binding.  I considered putting it in an operator table with right-associativity, and I ended up with something like:
 
 {% highlight haskell %}
 
@@ -142,7 +142,7 @@ operators =
 
 {% endhighlight %}
 
-But you should also be able to parse binding `Pi`s, at the same precedence as the non-binding variant.  But it's not quite a binary operator (here, my syntax almost makes it look like one, but if you wanted to use `Π` or `∀` it would become problematic).  So you'd want to remove `→` from your operator table, but then you'd need to either remove everything before it or after it and to manually order parsers for those operators somewhere else.
+But I should also be able to parse binding `Pi`s (i.e. `(x : τ1) → τ2`), at the same precedence as the non-binding variant.  But it's not quite a binary operator (here, my syntax almost makes it look like one, but if you wanted to use `Π` or `∀` it would become problematic).  So you'd want to remove `→` from your operator table, but then you'd need to either remove everything before it or after it and to manually order parsers for those operators somewhere else.
 
 ---
 
@@ -150,6 +150,7 @@ Somewhere else, the parts of your parser dealing with `λ` and `let` might look 
 
 {% highlight haskell %}
 
+lambdaletP :: Parser Term
 lambdaletP = choice [lambdaP, letP, whateverComesNextP]
 
 letP :: Parser Term
@@ -181,28 +182,53 @@ We need to introduce `lambdaletP` to be able to recognize `let x = 1 in λ y . 2
 A more modular approach
 -----------------------
 
-Recognizing all these issues, one can design parsers for each syntactic construct, such that they are modular in:
+If we take a step back, we can see that our issues arise from our parsers needing to call:
 
-- what exists at their precedence level
+- the parser at their own precedence level,
 
-- what exists at their next precedence level.
+- and the parser at the next precedence level.
 
-To do so, we adopt the discipline of parameterizing each parser by two parsers:
+Abstracting away the latter is easy: we can take it as input, and our caller will have to tell us who's next.
+
+Abstracting away the former might seem hard: if our parser explicitly calls itself recursively, it prevents other parsers from existing at its own level.  So we would like to receive a parser for the things at our level as input, but we would like to be part of this parser too!
+
+There is a classic trick to achieve this, called explicit open recursion: our parser will pass itself as input to its components!  Let's see how this works on a simple example, making `letP` and `lambdaP` receive `letlambdaP` as an input (they call it `selfP`):
 
 {% highlight haskell %}
 
-type SelfNextParser a =
+letP :: Parser Term -> Parser Term
+letP selfP = do ... t <- selfP ...
+
+lambdaP :: Parser Term -> Parser Term
+lambdaP selfP = do ... t <- selfP ...
+
+{% endhighlight %}
+
+Now we can define:
+
+{% highlight haskell %}
+
+lambdaletP :: Parser Term
+lambdaletP = choice [lambdaP lambdaletP, letP lambdaletP, whateverComesNextP]
+
+{% endhighlight %}
+
+Therefore, to define parsers that are modular in what exists at their precedence level and what exists at their next precedence level, we adopt the discipline of parameterizing our parsers by two parsers:
+
+{% highlight haskell %}
+
+type ModularParser a =
   Parser a ->             -- "self"-precedence parser
   Parser a ->             -- "next"-precedence parser
   Parser a
 
 {% endhighlight %}
 
-Now, a parser should (in general) not call itself recursively, but rather use the parser received as first argument.  Similarly, it should not call the parser for the next precedence construct, but rather use the parser received as second argument.  This is best demonstrated by the parser for the syntactic construct `τ1 → τ2`:
+From now on, a parser should (in general) not call itself recursively, but rather use the parser received as first argument.  Similarly, it should not call the parser for the next precedence construct, but rather use the parser received as second argument.  This is best demonstrated by the parser for the syntactic construct `τ1 → τ2`:
 
 {% highlight haskell %}
 
-arrowP :: SelfNextParser Term
+arrowP :: ModularParser Term
 arrowP selfP nextP = do
   τ1 <- try $ do
     τ1 <- nextP
@@ -219,7 +245,7 @@ Note that modular parsers can call both parsers received as input, but may also 
 
 {% highlight haskell %}
 
-annotP :: SelfNextParser Term
+annotP :: ModularParser Term
 annotP _selfP nextP = do
   t <- try $ do
     t <- nextP
@@ -234,7 +260,7 @@ Constructs that are allowed to appear without parentheses within themselves will
 
 {% highlight haskell %}
 
-letP :: SelfNextParser Term
+letP :: ModularParser Term
 letP selfP _nextP = do
   try $ do
     rword "let"
@@ -247,27 +273,30 @@ letP selfP _nextP = do
 
 {% endhighlight %}
 
-And atoms will not call either:
+And parsers for atoms will not call either:
 
 {% highlight haskell %}
 
-varP :: SelfNextParser Term
-varP _selfP _nextP = Var <$> identifier
+atomP :: Parser a -> ModularParser a
+atomP p _selfP _nextP = p
+
+varP :: Parser Term
+varP = Var <$> identifier
 
 {% endhighlight %}
 
-And now for our tour de force, we will combine all those parsers into a parser for the full language.  A language will be defined by a list of list of modular parsers, where rows are precedence levels:
+Now, for our tour de force, we will combine all those parsers into a parser for the full language.  A language will be defined by a list of list of modular parsers, where rows are precedence levels:
 
 {% highlight haskell %}
 
-parserTable :: [[SelfNextParser Term]]
+parserTable :: [[ModularParser Term]]
 parserTable =
   -- low precedence
   [ [letP, lambdaP]
   , [annotP]
   , [piP, arrowP]
   , [appP]
-  , [atomP]
+  , [atomP varP]
   ]
   -- high precedence
 
@@ -277,13 +306,17 @@ Each row should be turned in a parser for the given precedence level, which trie
 
 {% highlight haskell %}
 
-choiceOrNextP :: [SelfNextParser a] -> Parser a -> Parser a
+choiceOrNextP :: [ModularParser a] -> Parser a -> Parser a
 choiceOrNextP ps nextP =
   fix $ \ selfP -> choice $ map (\ p -> p selfP nextP) ps ++ [nextP]
 
+-- If you're unsure about fix, this is the same as:
+choiceOrNextP ps nextP =
+  choice $ map (\ p -> p (choiceOrNextP ps nextP) nextP) ps ++ [nextP]
+--                       ^^^^^^^^^^^^^^^^^^^^^^^^ this is ourself!
 {% endhighlight %}
 
-Given a row `ps`, and a handle on the next precedence parser `nextP`, we want to choose among all `SelfNextParser`s.  But remember that they need to receive the parser for the current precedence level as their first input, that is, the parser we are currently in the process of building.  Thanks to the open recursion trick and the fixpoint operator, we can obtain a handle to ourself `selfP`, and pass it to each modular parser `p` as their first argument.  `choiceOrNextP` receives `nextP` as an argument, and just passes it along to everyone.  However, in the case where every parser in the row fails, we also append `nextP` to our choice list, thus defaulting to the next row when all else fails.
+Given a row `ps`, and a handle on the next precedence parser `nextP`, we want to choose among all `ModularParser`s.  But remember that they need to receive the parser for the current precedence level as their first input, that is, the parser we are currently in the process of building.  Thanks to the open recursion trick and the fixpoint operator, we can obtain a handle to the very parser we are building as `selfP`, and pass it to each modular parser `p` as their first argument.  `nextP` is simply passed along too.  Note that we also append `nextP` to our list of choices, thus defaulting to the next row when all else fails.
 
 We should now be able to fold the entire table by:
 
@@ -297,8 +330,11 @@ We write a function `foldP` to do so:
 
 {% highlight haskell %}
 
-foldP :: [[SelfNextParser a]] -> Parser a
+foldP :: [[ModularParser a]] -> Parser a
 foldP ps = fix $ \ selfP -> foldr ($) (parens selfP) (map choiceOrNextP ps)
+
+-- If you're still confused about `fix`, this is the same as:
+foldP ps = foldr ($) (parens (foldP ps)) (map choiceOrNextP ps)
 
 {% endhighlight %}
 
@@ -329,11 +365,130 @@ termP = foldP parserTable
 
 All you need to do to change the precedence of operators is reorder lines in `parserTable`.  All you need to do to introduce a new precedence level is create a new line in the table.  The overall structure of the language is immediately readable from the `parserTable`.
 
-Limitations of this approach
-----------------------------
+One step further
+----------------
 
-In this post, I assumed that all the parsers in the table fail without consuming input.  You might need to sprinkle some carefully-chosen `try`s if that's not the case for your parsers.  I haven't yet encountered other limitations with this approach, but I'd be happy to discuss them.  I have never seen this technique mentioned in literature or in code or blogs in the wild.  If this was already documented elsewhere, please leave me a pointer in the comments.
+It's still not simple to recognize what productions are binary operators, and to change their associativity.  We had to make this decision within `arrowP` by plugging `selfP` and `nextP` according to our intent.  We can lift this decision into the parser table by creating three operators:
 
-I am also interested in pushing this further and having one declarative structure used for generating both the parser and the pretty-printer.  I am currently exploring a language which uses this idea [here](https://github.com/Ptival/chick) (a more complex version of the running example is in [`lib/Parsing.hs`](https://github.com/Ptival/chick/blob/460bc355ba2e33013fd1ee38d0d4dcf6660350e7/lib/Parsing.hs#L16), and you can see that the generated parser is tested against the pretty-printer with HUnit, SmallCheck and QuickCheck in [`test/Main.hs`](https://github.com/Ptival/chick/blob/460bc355ba2e33013fd1ee38d0d4dcf6660350e7/test/Main.hs#L104-L106)).
+{% highlight haskell %}
+
+-- These type aliases will come in handy
+type Parser1 a = Parser a -> Parser  a
+type Parser2 a = Parser a -> Parser1 a
+-- For now, Parser2 is the same as ModularParser
+
+binOpLP :: String -> (a -> a -> a) -> Parser2 a
+binOpLP s k _selfP nextP = chainl1 nextP (symbol s *> return k)
+
+binOpRP :: String -> (a -> a -> a) -> Parser2 a
+binOpRP s k selfP nextP = do
+  l <- try $ do
+    l <- nextP
+    symbol s
+    return l
+  r <- selfP
+  return $ k l r
+
+binOpNP :: String -> (a -> a -> a) -> Parser2 a
+binOpNP s k _selfP nextP = binOpRP s k nextP nextP
+
+{% endhighlight %}
+
+`binOpRP` is the easiest to start with: it attemps to parse something at the next level for the left operand, then to parse the infix symbol, after which it can commit and parse the right operand.  It calls the output constructor with `l` and `r` (for instance, `Pi "" l r`).
+
+`binOpLP` would look like `binOpRP`, where the `l` line would read `l <- selfP` and the `r` line would read `r <- nextP`.  However, this would result in a infinite loop of calls to `selfP`.  The usual trick is to use `chainl1` instead.
+
+`binOpNP` would look like `binOpRP`, where the `l` line would read `l <- nextP` and the `r` line would remain unchanged.  I cheat here by reusing the existing code of `binOpRP`, plugging in `nextP` for both arguments.
+
+We can finally rewrite our parser table as:
+
+{% highlight haskell %}
+
+parserTable :: [[ModularParser Term]]
+parserTable =
+  -- low precedence
+  [ [letP, lambdaP]
+  , [binOpNP ":" Annot]
+  , [piP, binOpRP "→" (Pi "")]
+  , [binOpLP "" App]
+  , [atomP varP]
+  ]
+  -- high precedence
+
+{% endhighlight %}
+
+We can even package this all up into a neat data type:
+
+{% highlight haskell %}
+
+data Associativity = LeftAssociative | RightAssociative | NonAssociative
+
+-- From now no, `ModularParser` will refer to this data type,
+-- and `Parser2` will be used to talk about the old parameterized parser
+data ModularParser a
+  = SelfNextParser (Parser2 a)
+  | BinaryOpParser Associativity String (a -> a -> a)
+  | AtomParser (Parser a)
+  -- etc.
+
+{% endhighlight %}
+
+It is then easy to define a function:
+
+{% highlight haskell %}
+
+unModularP :: ModularParser a -> Parser2 a
+unModularP (SelfNextParser p) = p
+unModularP (BinaryOpParser LeftAssociative  s p) = binOpL s p
+unModularP (BinaryOpParser RightAssociative s p) = binOpR s p
+unModularP (BinaryOpParser NonAssociative   s p) = binOpN s p
+unModularP (AtomParser p) = \ _selfP _nextP -> p
+
+{% endhighlight %}
+
+and to update `choiceOrNextP`:
+
+{% highlight haskell %}
+
+choiceOrNextP :: [ModularParser a] -> Parser1 a
+choiceOrNextP ps nextP =
+  fix $ \ selfP -> choice $ map (\ p -> unmodularP p selfP nextP) ps ++ [nextP]
+--                                      ^^^^^^^^^^
+--                                      added this
+
+{% endhighlight %}
+
+so that we can finally write our parser table as:
+
+{% highlight haskell %}
+
+binOpL, binOpR, binOpN :: String -> (a -> a -> a) -> ModularParser a
+binOpL = BinaryOpParser LeftAssociative
+binOpR = BinaryOpParser RightAssociative
+binOpN = BinaryOpParser NonAssociative
+
+parserTable :: [[ModularParser Term]]
+parserTable =
+  -- low precedence
+  [ [SelfNextParser letP, SelfNextParser lambdaP]
+  , [binOpN ":" Annot]
+  , [SelfNextParser piP, binOpR "→" (Pi "")]
+  , [binOpL "" App]
+  , [Atom varP]
+  ]
+  -- high precedence
+
+{% endhighlight %}
+
+We are almost back to what was provided by `Text.MegaParsec.Expr`, except that we have additional constructors for arbitrary `SelfNextParser`, for `Atom` parsers, and we can extend it with constructors to fit our future needs.
+
+About this approach
+-------------------
+
+In this post, I assumed that all the parsers in the table fail without consuming input.  You might need to sprinkle some carefully-chosen `try`s if that's not the case for your parsers.
+
+I have not seen this technique mentioned in literature or in code or blogs in the wild.  If this was already documented elsewhere, please leave me a pointer in the comments.
+
+I am also interested in pushing this further and having one declarative structure used for generating both the parser and the pretty-printer.  I am currently exploring a language which uses this idea [here](https://github.com/Ptival/chick) (a more complex version of the running example is in [lib/Parsing.hs](https://github.com/Ptival/chick/blob/5b68c4e4830e2f161f30f8e117945e502f5a5580/lib/Parsing.hs#L16-L57), and you can see that the generated parser is tested against the pretty-printer with HUnit, SmallCheck and QuickCheck in [test/Main.hs](https://github.com/Ptival/chick/blob/5b68c4e4830e2f161f30f8e117945e502f5a5580/test/Main.hs)).
 
 I'm not sure this is worthy of a publication, but I might write this all up nicely in an article format and upload it to arXiv in the future.
