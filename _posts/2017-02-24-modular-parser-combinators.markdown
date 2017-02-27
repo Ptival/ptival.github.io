@@ -368,7 +368,7 @@ All you need to do to change the precedence of operators is reorder lines in `pa
 One step further
 ----------------
 
-It's still not simple to recognize what productions are binary operators, and to change their associativity.  We had to make this decision within `arrowP` by plugging `selfP` and `nextP` according to our intent.  We can lift this decision into the parser table by creating three operators:
+It's still not simple to recognize what productions are binary operators, and to change their associativity.  We had to make this decision within `arrowP` by plugging `selfP` and `nextP` according to our intent.  We can lift this decision into the parser table by creating three operators for left-, right-, and non-associative binary operators:
 
 {% highlight haskell %}
 
@@ -377,10 +377,12 @@ type Parser1 a = Parser a -> Parser  a
 type Parser2 a = Parser a -> Parser1 a
 -- For now, Parser2 is the same as ModularParser
 
-binOpLP :: String -> (a -> a -> a) -> Parser2 a
+-- The `String` is the operator, for instance ":", "→"
+-- The `a -> a -> a` is the constructor to use for this operator
+binOpLP, binOpRP, binOpNP :: String -> (a -> a -> a) -> Parser2 a
+
 binOpLP s k _selfP nextP = chainl1 nextP (symbol s *> return k)
 
-binOpRP :: String -> (a -> a -> a) -> Parser2 a
 binOpRP s k selfP nextP = do
   l <- try $ do
     l <- nextP
@@ -389,7 +391,6 @@ binOpRP s k selfP nextP = do
   r <- selfP
   return $ k l r
 
-binOpNP :: String -> (a -> a -> a) -> Parser2 a
 binOpNP s k _selfP nextP = binOpRP s k nextP nextP
 
 {% endhighlight %}
