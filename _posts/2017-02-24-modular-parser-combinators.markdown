@@ -488,6 +488,8 @@ About this approach
 
 In this post, I assumed that all the parsers in the table fail without consuming input.  You might need to sprinkle some carefully-chosen `try`s if that's not the case for your parsers.
 
+You might wonder why I put the `parens` case in `foldP`, rather than add a line `SelfNextParser $ \ _selfP nextP -> parens nextP` at the end of the table.  The issue is that for this final line of the parser, we don't want to run `choiceOrNextP` on it, because it should not default to `nextP`!  One could deal with this though, for instance by mapping `choiceOrNextP` on all but the last entries in the table.  The two approaches are equivalent.
+
 I have not seen this technique mentioned in literature or in code or blogs in the wild.  If this was already documented elsewhere, please leave me a pointer in the comments.
 
 I am also interested in pushing this further and having one declarative structure used for generating both the parser and the pretty-printer.  I am currently exploring a language which uses this idea [here](https://github.com/Ptival/chick) (a more complex version of the running example is in [lib/Parsing.hs](https://github.com/Ptival/chick/blob/5b68c4e4830e2f161f30f8e117945e502f5a5580/lib/Parsing.hs#L16-L57), and you can see that the generated parser is tested against the pretty-printer with HUnit, SmallCheck and QuickCheck in [test/Main.hs](https://github.com/Ptival/chick/blob/5b68c4e4830e2f161f30f8e117945e502f5a5580/test/Main.hs)).
