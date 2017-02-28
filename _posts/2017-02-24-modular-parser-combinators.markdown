@@ -391,6 +391,10 @@ binOpRP s k selfP nextP = do
   r <- selfP
   return $ k l r
 
+-- If you like not being able to re-read yourself in one year,
+-- you can also write it:
+binOpRP s k selfP nextP = k <$> try (nextP <* symbol s) <*> selfP
+
 binOpNP s k _selfP nextP = binOpRP s k nextP nextP
 
 {% endhighlight %}
