@@ -11,6 +11,9 @@ kramdown:
   hard_wrap: false
 permalink: pretty
 
+gems:
+  - jemoji
+
 # Third-party services
 # just leave empty to disable it
 google_analytics:
