@@ -15,7 +15,7 @@ post [two posts ago](/2017/02/25/modular-parser-combinators), but it's
 this time of the year where our students need it, so here comes!
 
 The rest of this post is somewhat generic in what parser generator in
-the `yacc` family you use, for instance, OCaml's `ocamlyacc` and
+the `yacc` family you use, for instance, OCaml's `menhir` and
 Haskell's `happy`.
 
 As I mentioned in the earlier post, there are two ways to deal with
@@ -54,8 +54,9 @@ The correct solution
 
 Unfortunately, to find the correct solution, I had to read
 the
-[documentation](https://caml.inria.fr/pub/docs/manual-ocaml/lexyacc.html) carefully,
-and understand some low-level details of the implementation.
+[documentation](http://pauillac.inria.fr/~fpottier/menhir/manual.pdf)
+carefully, and understand some low-level details of the
+implementation.
 
 If you do so, you will learn that shift-reduce conflicts are resolved
 by comparing the declared precedence of the token to be shifted with
