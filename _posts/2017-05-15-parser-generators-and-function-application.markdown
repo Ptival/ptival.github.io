@@ -141,6 +141,18 @@ you never declared it, it had higher precedence.
 
 That's it for parsing function application!
 
+**EDIT:** To be clear, you might also have tokens that need to be at
+higher precedence than `APP`.  For instance, if you want `f a -> b` to
+parse as `(f a) -> b` rather than `f (a -> b)`, you will want:
+
+{% highlight ocaml %}
+%nonassoc LPAREN VAR /* etc. */
+%nonassoc APP
+%left ARROW
+{% endhighlight %}
+
+Those tokens should not be valid start tokens for an expression.
+
 One caveat of the "parser directives" approach
 ----------------------------------------------
 
