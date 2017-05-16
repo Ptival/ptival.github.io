@@ -243,4 +243,9 @@ But honestly, this halfway refactoring makes the grammar look more
 complicated that the redundant original one, so I don't think it's
 really worth it.
 
+**EDIT**: Reddit user
+`/u/Drupyog`
+[mentions](https://www.reddit.com/r/ocaml/comments/6bjs9l/parser_generators_and_function_application/dhnerij/) the
+existence of a keyword `%inline` to handle this in Menhir. Nice!
+
 That's all for today!
