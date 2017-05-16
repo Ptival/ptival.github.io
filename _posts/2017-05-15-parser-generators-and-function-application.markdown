@@ -6,6 +6,10 @@ comments: true
 categories:
 ---
 
+**TLDR**: If you want to parse function application `f a b` correctly,
+you need to, counter-intuitively, give some precedence to tokens such
+as `LPAREN`, `VAR`, `NUM`, `LAMBDA`, etc.
+
 I promised this
 post [two posts ago](/2017/02/25/modular-parser-combinators), but it's
 this time of the year where our students need it, so here comes!
