@@ -7,8 +7,8 @@ categories:
 ---
 
 This post is part of a series.
-[Initial post](https://ptival.github.io/2018/08/30/card-game-01/)
-[Previous post](https://ptival.github.io/2018/08/30/card-game-01/)
+- [Initial post](https://ptival.github.io/2018/08/30/card-game-01/)
+- [Previous post](https://ptival.github.io/2018/08/30/card-game-01/)
 
 [Source code for this post](https://github.com/Ptival/yugioh/tree/c9ced7955e4204b1e54087885cd21e59146671f4)
 
