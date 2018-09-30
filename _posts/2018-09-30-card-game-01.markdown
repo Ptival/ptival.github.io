@@ -126,7 +126,7 @@ package.
 
 display :: Card -> String
 display (Card {..}) =
-  [i|#{\_name} [#{\_attribute}] (#{\_monsterType} Lv.#{\_level}) [#{\_attack}/#{\_defense}]|]
+  [i|#{_name} [#{_attribute}] (#{_monsterType} Lv.#{_level}) [#{_attack}/#{_defense}]|]
 
 {% endhighlight %}
 
