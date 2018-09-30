@@ -1,0 +1,292 @@
+---
+layout: post
+title: "Creating a card game in Haskell (part 2)"
+date: 2018-08-30 03:00:00 -0700
+comments: true
+categories:
+---
+
+This post is part of a series.
+[Initial post](https://ptival.github.io/2018/08/30/card-game-01/)
+[Previous post](https://ptival.github.io/2018/08/30/card-game-01/)
+
+[Source code for this post](https://github.com/Ptival/yugioh/tree/c9ced7955e4204b1e54087885cd21e59146671f4)
+
+Adding players
+--------------
+
+Now that we can represent cards, let's add players and the mats in the picture!
+First, we are going to need to represent the position of cards on the mat.
+Monster cards can be in one of three positions: face-down defense, face-up
+defense, or (face-up) attack.
+
+{% highlight haskell %}
+
+data Position
+  = Attack
+  | FaceDownDefense
+  | FaceUpDefense
+  deriving (Eq, Generic, Show)
+
+{% endhighlight %}
+
+A space for a card on the mat can either contain a card, in some position, or be
+empty:
+
+{% highlight haskell %}
+
+data Space
+  = MonsterCard Card Position
+  | Empty
+  deriving (Eq, Generic, Show)
+
+{% endhighlight %}
+
+We are now ready to define our mat.  For now, let's only have the main monster
+zone, the graveyard, and the deck.  We will eventually add the other zones once
+we can represent the cards that use them.
+
+{% highlight haskell %}
+
+data Mat = Mat
+  { _mainMonsterZone :: [Space]
+  , _graveyard       :: [Card]
+  , _deck            :: [Card]
+  }
+  deriving (Eq, Generic, Show)
+
+makeLenses ''Mat
+
+{% endhighlight %}
+
+Depending on what version of Yu-Gi-Oh! we desire to simulate, we might want
+different values for certain parameters.  For instance, the size of the main
+monster zone is 3 in the online card game Duel Links, but 5 in the trading card
+game.  Let's think ahead and make a configuration datatype to capture those
+values.
+
+{% highlight haskell %}
+
+data Configuration = Configuration
+  { _deckMinimumSize           :: Int
+  , _deckMaximumSize           :: Int
+  , _mainMonsterZoneSize       :: Int
+  , _originalLifePoints        :: Int
+  , _spellTrapPendulumZoneSize :: Int
+  }
+  deriving (Eq, Generic, Show)
+
+makeLenses ''Configuration
+
+{% endhighlight %}
+
+I added some other configuration parameters.  They should be pretty
+self-explanatory.  We can set up the two configurations I talked about:
+
+{% highlight haskell %}
+
+duelLinksConfiguration :: Configuration
+duelLinksConfiguration = Configuration
+  { _deckMinimumSize           = 20
+  , _deckMaximumSize           = 40
+  , _mainMonsterZoneSize       = 3
+  , _originalLifePoints        = 4000
+  , _spellTrapPendulumZoneSize = 3
+  }
+
+tradingCardGameConfiguration :: Configuration
+tradingCardGameConfiguration = Configuration
+  { _deckMinimumSize           = 40
+  , _deckMaximumSize           = 60
+  , _mainMonsterZoneSize       = 5
+  , _originalLifePoints        = 8000
+  , _spellTrapPendulumZoneSize = 5
+  }
+
+{% endhighlight %}
+
+Let's also have a testing configuration with fewer cards:
+
+{% highlight haskell %}
+
+testingConfiguration :: Configuration
+testingConfiguration = Configuration
+  { _deckMinimumSize           = 1
+  , _deckMaximumSize           = 3
+  , _mainMonsterZoneSize       = 3
+  , _originalLifePoints        = 4000
+  , _spellTrapPendulumZoneSize = 3
+  }
+
+{% endhighlight %}
+
+Now, I would like a helper to create a starting mat for a player, given their
+deck.  I could have defined it as:
+
+{% highlight haskell %}
+
+makeMat :: Configuration -> [Card] -> Mat
+makeMat configuration playerDeck =
+  let mmzSize = view mainMonsterZoneSize configuration in
+  Mat
+  { _mainMonsterZone = replicate mmzSize Empty
+  , _graveyard       = []
+  , _deck            = playerDeck
+  }
+
+{% endhighlight %}
+
+But, I'm going to use `extensible-effects` to factor out many effects out of my
+computations.  Here, I would like the configuration to be passed implicitly via
+a `Reader` effect.  So instead, I add the following helper to `Configuration`:
+
+{% highlight haskell %}
+
+askConfiguration ::
+  ( Member (Reader Configuration) e ) =>
+  Lens' Configuration a -> Eff e a
+askConfiguration l = view l <$> ask
+
+{% endhighlight %}
+
+This allows me to, in an effectful context with `Reader Configuration`, ask for
+any part of the configuration by passing as argument the lens to the element
+that I care about.  I can then define `makeMat` as:
+
+{% highlight haskell %}
+
+makeMat ::
+  ( Member (Reader Configuration) e ) =>
+  [Card] -> Eff e Mat
+makeMat playerDeck = do
+  mmzSize <- askConfiguration mainMonsterZoneSize
+  return $ Mat
+    { _mainMonsterZone = replicate mmzSize Empty
+    , _graveyard       = []
+    , _deck            = playerDeck
+    }
+
+{% endhighlight %}
+
+To finish this, let's make our mats displayable:
+
+{% highlight haskell %}
+
+displayPosition :: Position -> String
+displayPosition = \case
+  Attack          -> "Attack"
+  FaceDownDefense -> "Face-Down Defense"
+  FaceUpDefense   -> "Face-Up Defense"
+
+displaySpace :: Space -> String
+displaySpace = \case
+  Empty                     -> "Empty"
+  MonsterCard card position -> [i|#{Card.display card} (#{displayPosition position})|]
+
+displayList :: (a -> String) -> [a] -> String
+displayList displayElement = intercalate "\n" . map displayElement
+
+display :: Mat -> String
+display (Mat {..}) =
+  let mmz = displayList displaySpace _mainMonsterZone in
+  let d   = displayList Card.display _deck            in
+  let g   = displayList Card.display _graveyard       in
+  [i|Main monster zone:
+#{mmz}
+Deck (#{length _deck}):
+#{d}
+Graveyard (#{length _graveyard}):
+#{g}|]
+
+{% endhighlight %}
+
+Note that the `\case` is a syntactic sugar provided by the extension
+`LambdaCase` to indicate that you immediately do a case analysis on the incoming
+argument.
+
+We can now define our player:
+
+{% highlight bash %}
+
+data Player = Player
+  { _name       :: String
+  , _hand       :: [Card.Card]
+  , _lifePoints :: Int
+  , _mat        :: Mat.Mat
+  }
+  deriving (Eq, Generic, Show)
+
+makeLenses ''Player
+
+{% endhighlight %}
+
+and a helper to create a player:
+
+{% highlight haskell %}
+
+makePlayer ::
+  ( Member (Reader Configuration) e ) =>
+  String -> [Card.Card] -> Eff e Player
+makePlayer playerName playerDeck = do
+  lp <- view originalLifePoints <$> ask
+  playerMat <- Mat.makeMat playerDeck
+  return $ Player
+    { _name       = playerName
+    , _hand       = []
+    , _lifePoints = lp
+    , _mat        = playerMat
+    }
+
+{% endhighlight %}
+
+and a helper to display a player:
+
+{% highlight haskell %}
+
+display :: Player -> String
+display (Player {..}) =
+  let h = displayList Card.display _hand in
+  [i|#{_name} (LP: #{_lifePoints})
+Hand (#{length _hand}):
+#{h}
+TEST
+#{Mat.display _mat}|]
+
+{% endhighlight %}
+
+Let's create our first player and look at them!
+
+{% highlight haskell %}
+
+player :: Player
+player =
+  run
+  $ runReader testingConfiguration
+  $ makePlayer "Seto Kaiba" [blueEyesWhiteDragon, blueEyesWhiteDragon]
+
+main :: IO ()
+main = do
+  putStrLn $ display player
+
+{% endhighlight %}
+
+{% highlight bash %}
+
+$ stack exec yugioh
+Seto Kaiba (LP: 4000)
+Hand (0):
+
+TEST
+Main monster zone:
+Empty
+Empty
+Empty
+Deck (2):
+Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Graveyard (0):
+
+
+{% endhighlight %}
+
+In the next chapter, we will create our first notion of a d-d-d-duel!
