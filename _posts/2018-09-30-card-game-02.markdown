@@ -1,14 +1,14 @@
 ---
 layout: post
 title: "Creating a card game in Haskell (part 2)"
-date: 2018-08-30 03:00:00 -0700
+date: 2018-09-30 03:00:00 -0700
 comments: true
 categories:
 ---
 
 This post is part of a series.
-- [Initial post](https://ptival.github.io/2018/08/30/card-game-01/)
-- [Previous post](https://ptival.github.io/2018/08/30/card-game-01/)
+- [Initial post](https://ptival.github.io/2018/09/30/card-game-01/)
+- [Previous post](https://ptival.github.io/2018/09/30/card-game-01/)
 
 [Source code for this post](https://github.com/Ptival/yugioh/tree/c9ced7955e4204b1e54087885cd21e59146671f4)
 
@@ -289,4 +289,5 @@ Graveyard (0):
 
 {% endhighlight %}
 
-In the next chapter, we will create our first notion of a d-d-d-duel!
+In the [next post](https://ptival.github.io/2018/10/08/card-game-03/), we will
+create our first notion of a d-d-d-duel!

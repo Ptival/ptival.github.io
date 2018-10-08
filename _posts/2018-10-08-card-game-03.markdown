@@ -1,0 +1,455 @@
+---
+layout: post
+title: "Creating a card game in Haskell (part 3)"
+date: 2018-10-08 15:19:00 -0700
+comments: true
+categories:
+---
+
+This post is part of a series.
+- [Initial post](https://ptival.github.io/2018/09/30/card-game-01/)
+- [Previous post](https://ptival.github.io/2018/09/30/card-game-02/)
+
+[Source code for this post](https://github.com/Ptival/yugioh/tree/f94c1aa4e234e0c8ca5e6e6cda958732318b1f58)
+
+It's time to d-d-d-duel!
+------------------------
+
+We are now ready to define a data type for duels.  But first, we need a notion
+of a `Phase` for our duels.  The usual game has many phases, but for now, let's
+just focus on two to keep things short and simple!  We will only have a draw
+phase, during which players will draw a card, and an end phase, that indicates
+the intent to end the current turn.
+
+{% highlight haskell %}
+
+data Phase
+  = Draw
+  | End
+  deriving (Eq, Generic, Show)
+
+{% endhighlight %}
+
+We can now define a `Duel`.
+
+{% highlight haskell %}
+
+data Duel = Duel
+  { _turn          :: Int
+  , _phase         :: Phase
+  , _currentPlayer :: Player
+  , _otherPlayer   :: Player
+  }
+  deriving (Eq, Generic, Show)
+
+makeLenses ''Duel
+
+{% endhighlight %}
+
+Notice that all of those fields will evolve during the duel, which is why they
+are not part of our `Configuration`.  We will use a `State` effect to update the
+value of the current state as the duel progresses.
+
+It is also nice to have a log of the battle, where each action is recorded.
+This will allow for saving a nice game, and possibly replaying it.  For now we
+will only need four markers: when a card is drawn, when it is added to the hand
+(these two could have been together, but I'm thinking ahead a bit here!), when
+the draw phase ends, and finally when the turn ends.
+
+{% highlight haskell %}
+
+data Entry
+  = AddedCardToHand Player Card
+  | DrewCard        Player Card
+  | EndDrawPhase
+  | EndTurn
+  deriving (Eq, Generic, Show)
+
+type Log = [Entry]
+
+{% endhighlight %}
+
+Let's also have a nice way of displaying those log entries:
+
+{% highlight haskell %}
+
+display :: Entry -> String
+display = \case
+
+  AddedCardToHand player card ->
+    [i|#{view Player.name player} added card #{Card.display card} to their hand|]
+
+  DrewCard player card ->
+    [i|#{view Player.name player} drew card #{Card.display card}|]
+
+  EndDrawPhase -> "Draw Phase ended"
+
+  EndTurn -> "Turn ended"
+
+{% endhighlight %}
+
+It is now time to handle the mechanics of a duel! For this, we will need three
+effects, a `Reader` for the `Configuration`, a `State` for the `Duel`, and a
+`Writer` for the `Log`.  It's tedious to repeat, so we can make an alias for the
+set of constraints:
+
+{% highlight haskell %}
+
+type GameEffects e =
+  ( Member (Reader Configuration) e
+  , Member (State  Duel)          e
+  , Member (Writer Log)           e
+  )
+
+{% endhighlight %}
+
+It will be nice to have a couple composite lenses to directly access the deck of
+a player, or their hand:
+
+{% highlight haskell %}
+
+playerDeckLens :: Lens' Duel Player -> Lens' Duel [Card]
+playerDeckLens playerLens = playerLens . mat . Mat.deck
+
+playerHandLens :: Lens' Duel Player -> Lens' Duel [Card]
+playerHandLens playerLens = playerLens . hand
+
+{% endhighlight %}
+
+Also, because we will be using our lenses over effects, I like to have a couple
+helpers to obtain or modify a given part of a data structure under effects:
+
+{% highlight haskell %}
+
+askLensed :: Member (Reader s) r => Getting b s b -> Eff r b
+askLensed l = view l <$> ask
+
+getLensed :: Member (State s) r => Getting b s b -> Eff r b
+getLensed l = view l <$> get
+
+overLensed :: Member (State s) r => ASetter s s a b -> (a -> b) -> Eff r ()
+overLensed l f = modify (over l f)
+
+setLensed :: Member (State s) r => ASetter s s a b -> b -> Eff r ()
+setLensed l v = modify (set l v)
+
+{% endhighlight %}
+
+Phew, the type signatures look a bit scary, but these are really doing mundane
+thing: you pass in a lens to some field, and it performs the action.  Oh, I also
+like to have another little helper.  I'm honestly surprised I never found it in
+standard libraries as it is very nifty.  Here it is:
+
+{% highlight haskell %}
+
+infixl 4 <*^>
+
+(<*^>) :: Applicative f => f (a -> b) -> a -> f b
+(<*^>) f v = f <*> pure v
+
+{% endhighlight %}
+
+We will soon see it in action, but at a high-level, it's useful when you want to
+create a data type where a couple fields require an effectful computation, but
+somes do not and only require a pure value.  This lets you lift the pure value
+without having to write `pure`, so think of it as `(<*>)` but where the incoming
+argument is pure and gets lifted into the applicative functor.
+
+Let's now write our largest function so far, `drawCard`, whose purpose is to get
+a card from a player's deck, removing it from the deck and returning it.  It
+will assume that there is a card to be drawn, and will fail otherwise.
+
+{% highlight haskell %}
+
+drawCard ::
+  ( GameEffects e ) =>
+  Lens' Duel Player -> Eff e Card
+drawCard whichPlayer = do
+  let currentPlayerDeckLens :: Lens' Duel [Card]
+      currentPlayerDeckLens = playerDeckLens whichPlayer
+  currentPlayerDeck <- getLensed currentPlayerDeckLens
+  case currentPlayerDeck of
+    [] -> error "drawCard: no card left in player's deck"
+    drawn : restOfDeck -> do
+      setLensed currentPlayerDeckLens restOfDeck
+      log =<< DrewCard <$> getLensed whichPlayer <*^> drawn
+      return drawn
+
+{% endhighlight %}
+
+That's quite a bit, let's dissect it slowly.  We take as input a `Lens'` that
+indicates which player is supposed to draw the card.  We refine it into a
+`Lens'` to their deck on the mat.  Unfortunately, we need the explicit type
+signature.  We need an explicit type signature there to help the type-checker,
+lenses are defined using rank-2 polymorphism and get too specialized without it.
+
+Notice how I use my `(<*^>)` to lift `drawn` into the effectful computation.
+Otherwise, I'd have to write `pure drawn`, and I feel like it adds a lot of
+visual clutter for such a small concept.
+
+We can then inspect the deck in question, throw an error if it is empty, and
+extract the first card in the other case.  `log` is a small helper function to
+append to the log:
+
+{% highlight haskell %}
+
+log :: Member (Writer [a]) r => a -> Eff r ()
+log v = tell [v]
+
+{% endhighlight %}
+
+Because of how the `Writer` effect is set up, we need a monoidal type to
+accumulate all the values (rather than overwrite every time we use `tell`).
+Using a list is the simplest way to get there.  Adding a given card to a
+player's hand is similar:
+
+{% highlight haskell %}
+
+addCardToHand ::
+  ( GameEffects e ) =>
+  Lens' Duel Player -> Card -> Eff e ()
+addCardToHand whichPlayer card = do
+  let currentPlayerHandLens :: Lens' Duel [Card]
+      currentPlayerHandLens = playerHandLens whichPlayer
+  overLensed currentPlayerHandLens ((:) card)
+  log =<< AddedCardToHand <$> getLensed whichPlayer <*^> card
+
+{% endhighlight %}
+
+We are almost ready to define the mechanics of the different phases.  However,
+we will need to define a data for victory conditions.  For now, since we can
+only draw cards, the only victory condition will be that one player has no card
+left to draw.
+
+{% highlight haskell %}
+
+data VictoryCondition
+  = OpponentRanOutOfCards
+  deriving (Eq, Generic, Show)
+
+data Victory = Victory
+  { _winner           :: Player
+  , _victoryCondition :: VictoryCondition
+  }
+  deriving (Eq, Generic, Show)
+
+{% endhighlight %}
+
+Let's also throw in a helper constructor and some display functions:
+
+{% highlight haskell %}
+
+displayVictoryCondition :: VictoryCondition -> String
+displayVictoryCondition = \case
+
+  OpponentRanOutOfCards -> "Opponent ran out of cards"
+
+display :: Victory -> String
+display v =
+  [i|#{view (winner . name) v} won: #{displayVictoryCondition $ view victoryCondition v}|]
+
+makeVictory :: Player -> VictoryCondition -> Victory
+makeVictory _winner _victoryCondition = Victory
+  { _winner
+  , _victoryCondition
+  }
+
+{% endhighlight %}
+
+Ok, now we have everything in place to describe the mechanics of our two
+phases.  First, let's do the draw phase.
+
+{% highlight haskell %}
+
+endDrawPhase :: ( GameEffects e ) => Eff e ()
+endDrawPhase = do
+  setLensed phase End
+  log EndDrawPhase
+
+drawPhase :: ( GameEffects e ) => Eff e (Maybe Victory)
+drawPhase = do
+  currentPlayerDeck <- getLensed $ playerDeckLens currentPlayer
+  if length currentPlayerDeck == 0
+    then do
+    winner <- getLensed otherPlayer
+    return $ Just $ makeVictory winner OpponentRanOutOfCards
+    else do
+    card <- drawCard currentPlayer
+    addCardToHand currentPlayer card
+    endDrawPhase
+    return Nothing
+
+{% endhighlight %}
+
+Nothing super complicated once all the pieces are in place.  Notice the return
+type is a `Maybe Victory`, indicating a victory or that the game should proceed.
+For the end phase, since we don't have any effectful cards yet, we just need to
+end the turn properly.  This requires incrementing the turn number, switching
+the current player with the other player, and setting the next phase back to the
+draw phase.
+
+{% highlight haskell %}
+
+endPhase :: ( GameEffects e ) => Eff e (Maybe Victory)
+endPhase = do
+  finishedTurnPlayer <- getLensed currentPlayer
+  upcomingTurnPlayer <- getLensed otherPlayer
+  setLensed  currentPlayer upcomingTurnPlayer
+  setLensed  otherPlayer   finishedTurnPlayer
+  overLensed turn          (+ 1)
+  setLensed  phase         Draw
+  log EndTurn
+  return Nothing
+
+{% endhighlight %}
+
+Aren't lenses neat sometimes?  One big advantage is that, if I modify the
+underlying representation of duels, this code will not need to change.  There is
+a small drawback though: if I add a new field that must be modified by the end
+phase, this code will compile without warning me that I did not touch that
+field.  Sometimes, using the explicit record is better because it forces you to
+pay attention to it when things change...  It's all a trade-off!
+
+This post is getting quite long, but we still need a couple things before we can
+wrap up.  Notice that I made `endPhase` return a `Maybe Victory` even though
+there is no reason for it to fail.  This uniformity will help in dispatching
+phases:
+
+{% highlight haskell %}
+
+runPhase :: ( GameEffects e ) => Eff e (Maybe Victory)
+runPhase = do
+  getLensed phase >>= \case
+    Draw -> drawPhase
+    End  -> endPhase
+
+{% endhighlight %}
+
+And this is great because now we can run a duel by dispatching phases until one
+of them returns `Just` a `Victory`.
+
+{% highlight haskell %}
+
+duel :: ( GameEffects e ) => Eff e Victory
+duel = untilJust runPhase
+
+{% endhighlight %}
+
+Easy!  Time to run a duel.  Given two players, we can setup a duel by creating
+the initial state:
+
+{% highlight haskell %}
+
+makeDuel :: Player -> Player -> Duel
+makeDuel firstPlayer secondPlayer = Duel
+  { _turn          = 1
+  , _phase         = Draw
+  , _currentPlayer = firstPlayer
+  , _otherPlayer   = secondPlayer
+  }
+
+{% endhighlight %}
+
+Now, I realized that it'd be helpful to have a data type for a `Duelist`,
+i.e. just a name and their deck, before they are instantiated into a `Player`.
+
+{% highlight haskell %}
+
+data Duelist = Duelist
+  { _name :: String
+  , _deck :: [Card]
+  }
+
+makeLenses ''Duelist
+
+{% endhighlight %}
+
+Super simple, and it lets us write our `runDuel` function, which starts with two
+`Duelists`, and runs a duel automatically, yielding the victory condition, the
+log of all actions, and the final state of the duel.
+
+{% highlight haskell %}
+
+runDuel :: Duelist -> Duelist -> ((Victory, Log), Duel)
+runDuel duelist1 duelist2 =
+  run
+  $ runReader duelLinksConfiguration
+  $ do
+  player1 <- makePlayer duelist1
+  player2 <- makePlayer duelist2
+  let initialState = makeDuel player1 player2
+  runState initialState $ runMonoidWriter duel
+
+{% endhighlight %}
+
+Quite a bit happening here.  Remember that our current `GameEffects` include 3
+effects: the configuration reader, the duel state, and the log writer.  We must
+handle all three of those effects, but the order can matter.  First, to turn our
+duelists into players, we need to read the configuration (because how many life
+points they need depends on the configuration!), so this effect is handled
+separately.  The other effects are simply handled, but notice we use
+`runMonoidWriter` for the log in order to accumulate all the log entries into a
+list.
+
+Now we can run a simple duel:
+
+{% highlight haskell %}
+
+setoKaiba :: Duelist
+setoKaiba = Duelist
+  { _name = "Seto Kaiba"
+  , _deck = replicate 3 blueEyesWhiteDragon
+  }
+
+yamiYugi :: Duelist
+yamiYugi = Duelist
+  { _name = "Yami Yugi"
+  , _deck = replicate 3 beaverWarrior
+  }
+
+main :: IO ()
+main = do
+  let ((victory, duelLog), _) = runDuel setoKaiba yamiYugi
+  forM_ duelLog (putStrLn . Log.display)
+  putStrLn $ Victory.display victory
+
+{% endhighlight %}
+
+We display all the log entries, followed by the victory:
+
+{% highlight haskell %}
+$ stack exec yugioh
+
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw Phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw Phase ended
+Turn ended
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw Phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw Phase ended
+Turn ended
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw Phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw Phase ended
+Turn ended
+Yami Yugi won: Opponent ran out of cards
+
+{% endhighlight %}
+
+Not a very interesting duel, but I guess it pays to go last sometimes!  In order
+to make the duel more interesting, we will need quite a few features: a main
+phase where players can put down a card on the field, and a battle phase where
+players can carry an attack.  We will add those next time.  Stay tuned for the
+next chapter!
