@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Creating a card game in Haskell (part 1)"
-date: 2018-08-30 01:20:00 -0700
+date: 2018-09-30 01:20:00 -0700
 comments: true
 categories:
 ---
@@ -169,5 +169,5 @@ Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
 {% endhighlight %}
 
 Great, let's stop here.  In the [next
-chapter](https://ptival.github.io/2018/08/30/card-game-02/), we will create the
+chapter](https://ptival.github.io/2018/09/30/card-game-02/), we will create the
 data structures for our players and their decks.
