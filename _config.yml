@@ -14,5 +14,5 @@ gems:
 
 # Third-party services
 # just leave empty to disable it
-google_analytics:
+google_analytics: UA-63731208-2
 disqus_shortname: coqenstock
