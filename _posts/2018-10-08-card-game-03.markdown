@@ -2,13 +2,14 @@
 layout: post
 title: "Creating a card game in Haskell (part 3)"
 date: 2018-10-08 15:19:00 -0700
+permalink: card-game-03
 comments: true
 categories:
 ---
 
 This post is part of a series.
-- [Initial post](https://ptival.github.io/2018/09/30/card-game-01/)
-- [Previous post](https://ptival.github.io/2018/09/30/card-game-02/)
+- [Initial post](https://ptival.github.io/card-game-01/)
+- [Previous post](https://ptival.github.io/card-game-02/)
 
 [Source code for this post](https://github.com/Ptival/yugioh/tree/f94c1aa4e234e0c8ca5e6e6cda958732318b1f58)
 
@@ -451,5 +452,5 @@ Yami Yugi won: Opponent ran out of cards
 Not a very interesting duel, but I guess it pays to go last sometimes!  In order
 to make the duel more interesting, we will need quite a few features: a main
 phase where players can put down a card on the field, and a battle phase where
-players can carry an attack.  We will add those next time.  Stay tuned for the
-next chapter!
+players can carry an attack.  We add those in the [next
+chapter](https://ptival.github.io/card-game-04)!

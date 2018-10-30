@@ -70,6 +70,7 @@
 .page-content {
     position: relative;
     padding: $spacing-unit ($spacing-unit * 0.75);
+    max-width: 80rem;
     margin: 1rem;
     box-sizing: border-box;
     max-width: $max-width;
