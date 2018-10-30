@@ -1,0 +1,581 @@
+---
+layout: post
+title: "Creating a card game in Haskell (part 4)"
+date: 2018-10-29 19:15:00 -0700
+permalink: card-game-04
+comments: true
+categories:
+---
+
+This post is part of a series.
+- [Initial post](https://ptival.github.io/card-game-01)
+- [Previous post](https://ptival.github.io/card-game-03)
+
+[Source code for this post](https://github.com/Ptival/yugioh/tree/707b1e7e221c2964c28fa152ed4a3a7c989cc90d)
+
+Let's summon some monsters!
+---------------------------
+
+I would now like to add a `Draw` phase, during which players can summon cards
+to the main monster zone.  We can readily add it to the `Phase` data type:
+
+{% highlight haskell %}
+
+data Phase
+  = ...
+  | Main
+  deriving (Eq, Generic, Show)
+
+{% endhighlight %}
+
+This raises an annoying problem for our `Move` data type: there are now moves
+that can happen in different phases (for instance, a player can end their turn
+during the main phase, and the end phase, but **not** during the draw phase).
+There are also moves that are specific to a given phase, like normal summoning
+a monster.  It would be convenient to have these all live in the same data
+type, but it's annoying to handle the moves that don't make sense for a given
+phase.
+
+GADTs for static guarantees
+---------------------------
+
+Thankfully, we can exploit GADTs to statically declare what phases a given move
+may belong to:
+
+{% highlight haskell %}
+
+data Move (phase :: Phase) where
+  DrawCard     :: In phase '[ 'Draw ] => Move phase
+  EndDrawPhase :: In phase '[ 'Draw ] => Move phase
+  EndMainPhase :: In phase '[ 'Main ] => Move phase
+  EndTurn      :: In phase '[ 'End, 'Main ] => Move phase
+  ...
+
+{% endhighlight %}
+
+In order to do so, I introduced a new constraint called `In`, that is defined as
+such:
+
+{% highlight haskell %}
+
+type family InB (x :: k) (l :: [k]) where
+  InB x '[]      = 'False
+  InB x (x : _)  = 'True
+  InB x (b : xs) = InB x xs
+
+type In x l = InB x l ~ 'True
+
+{% endhighlight %}
+
+This might be quite hard for beginners!  `InB` is a type family establishing
+that a given type, `x`, belongs in a given list `l`, when it evaluates to
+`'True`.  If the type `x` is not to be found in the list, it evaluates to
+`'False`.  The quote in front of the constructor indicates that we are promoting
+values to types: since type families are computations that return types, we have
+to come up with two types for indicating success and failure.  We choose to
+promote the booleans constructors, since they are somewhat self-explanatory.
+
+Note that when describing a type family, the pattern matching works slightly
+differently than at the value level: when we write `x` twice in the second
+equation, this is effectively testing that the two types are equal!
+
+You should be able to see how this recursively goes through the list `l`,
+eventually finding `x` and returning the type `'True`, or reaching the end of
+the list and returning the type `'False`.  All that is left to turn this into a
+constraint is to use a type equality constraint, in the form of the infix
+operator `~`.  All `In x l` says is that it holds whenever `InB x l` evaluates
+to a type equal to `'True`.
+
+Well, I lied and simplified things a little!  In practice, this type family does
+not give great error messages when we write a wrong constraint, like `In 'A '[
+'B, 'C ]`.  The error message will say something along the line of:
+
+```
+• Couldn't match type ‘'False’ with ‘'True’
+```
+
+which is not great, as it does not mention `'A` or the list `'[ 'B, 'C ]`.  We
+can improve the error message slightly by using some proxy type that remembers
+the `x` and the `l` we cared about, and forces them to appear in the type error:
+
+{% highlight haskell %}
+
+data IsIn k
+  = IsIn
+  | IsNotIn k [k]
+
+type family InB (x :: k) (l :: [k]) (orig :: [k]) where
+  InB x '[]      orig = 'IsNotIn x orig
+  InB x (x : _)  _    = 'IsIn
+  InB x (b : xs) orig = InB x xs orig
+
+type In x xs = InB x xs xs ~ 'IsIn
+
+{% endhighlight %}
+
+We essentially swapped `'IsIn` for `'True`, and `'IsNotIn x l` for `'False`. By
+changing the constraint to check that the result of the type family computation
+unifies with `'IsIn`, we get slightly better error messages:
+
+```
+• Couldn't match type ‘'IsNotIn 'A '['B, 'C]’ with ‘'IsIn’
+```
+
+It's not the most explanatory, but at least we get to see the problem in the
+error message.
+
+We need to add two booleans to our `Player`, to keep track of whether they have
+drawn a card yet, and keep track of whether they have summoned a monster yet.
+
+{% highlight haskell %}
+
+data Player = Player
+  { ...
+  , _hasDrawnCard      :: Bool
+  , _hasNormalSummoned :: Bool
+  }
+
+{% endhighlight %}
+
+With this in place, we can define the `validMoves` for the `Draw` phase as:
+
+{% highlight haskell %}
+
+validMoves :: ( GameEffects e ) => Eff e [Move 'Draw]
+validMoves = do
+  getLensed (currentPlayer . hasDrawnCard) >>= \case
+    True ->
+      return [ Move.EndDrawPhase ]
+    False ->
+      return [ DrawCard ]
+
+{% endhighlight %}
+
+Note that the declared output type is `[Move 'Draw]`. Because of our use of
+GADTs, the compiler will prevent me from returning anything but `DrawCard` and
+`EndDrawPhase`, since these are the only two moves that are valid in the `Draw`
+phase.
+
+The draw phase mechanics can be implemented as:
+
+{% highlight haskell %}
+
+drawPhase :: ( GameEffects e ) => Eff e (Maybe Victory)
+drawPhase = validMoves >>= GameEffects.chooseMove >>= \case
+
+  DrawCard -> do
+    currentPlayerDeck <- getLensed $ playerDeckLens currentPlayer
+    if length currentPlayerDeck == 0
+      then do
+      winner <- getLensed otherPlayer
+      return $ Just $ makeVictory winner OpponentRanOutOfCards
+      else do
+      card <- drawCard currentPlayer
+      addCardToHand currentPlayer card
+      setLensed (currentPlayer . hasDrawnCard) True
+      drawPhase
+
+  Move.EndDrawPhase -> do
+    setLensed phase Main
+    log Log.EndDrawPhase
+    return Nothing
+
+{% endhighlight %}
+
+We will go over `chooseMove` in a second.  For now, just now that it is an
+effect that, given a list of moves, picks one for us.  Again, note how we only
+handled two of the many constructors of the `Move` data type!  Since we told the
+compiler that it would receive a `Move 'Draw`, it can statically figure out that
+this pattern match is exhaustive.  No need to put silly handlers for unrelated
+moves.  That's pretty neat!
+
+Heterogeneous zippers for picking elements from a heterogeneous list
+--------------------------------------------------------------------
+
+Now we want to implement the main phase.  The user will want to pick a monster
+card from their deck, and summon it if possible.  For now, their decks only
+contain monsters, so any valid index should give us a monster card.  But we also
+need a space in the main monster zone to receive the monster.  If we just use an
+index, we might accidentally pick a spot that already has a monster!  Could we
+again massage the type system into helping us guarantee that we are pointing to
+an empty space?  This will be useful not only now, but later, when we add spell
+and trap cards, to ensure that we do not accidentally try to summon a spell!
+
+First, we want to distinguish, at the type level, between empty spaces on the
+field, and spaces where a monster card is set.
+
+{% highlight haskell %}
+
+data SpaceType
+  = IsEmpty
+  | IsMonsterCard
+  deriving (Eq, Generic, Show)
+
+data Space a where
+  Empty       :: Space 'IsEmpty
+  MonsterCard ::
+    { _hasSwitchedPosition :: Bool
+    , _monsterCard         :: Card
+    , _monsterPosition     :: Position
+    } ->
+    Space 'IsMonsterCard
+
+type   EmptySpace = Space 'IsEmpty
+type MonsterSpace = Space 'IsMonsterCard
+
+{% endhighlight %}
+
+Again, using GADTs, we can statically keep track of the type of card (or lack
+thereof) in a given space.  Now, we would like a cursor into a list that
+guarantees that it points at an empty space, while preserving the other elements
+in the list.
+
+I came up with a somewhat reasonable, though not perfect solution.  It is based
+of the concept of a zipper, a really cool data structure that represents an
+excursion within a list (or other data structures, we can compute zippers for
+any container by simple algebraic methods!).  A list zipper usually consists of
+a list of elements prior to the cursor, an element at the cursor, and a list of
+elements posterior to the cursor.  It is a homogeneous data type that looks
+like:
+
+{% highlight haskell %}
+
+data ListZipper a = ListZipper
+  { _beforeCursor :: [a]
+  , _cursor       :: a
+  , _afterCursor  :: [a]
+  }
+
+{% endhighlight %}
+
+But for our purposes, we'd like the cursor to have a refined type, like `Space
+'IsEmpty`, while the other elements should have a generic type like `Space a`.
+To achieve this, we can parameterize our zipper with two types:
+
+{% highlight haskell %}
+-- in Zipper.hs
+
+data Zipper cursor others = Zipper
+  { _beforeCursor :: [others]
+  , _cursor       :: cursor
+  , _afterCursor  :: [others]
+  }
+
+-- in Space.hs
+
+type   EmptyZipper = Zipper EmptySpace   ScopedSpace
+type MonsterZipper = Zipper MonsterSpace ScopedSpace
+
+{% endhighlight %}
+
+Now, the type `EmptyZipper` type captures exactly a zipper focused on an empty
+space.  It is not as handy as the list zipper: in order to traverse a `Zipper
+cursor others`, we would need to have functions to focus and unfocus elements,
+with respective types `others -> cursor` and `cursor -> others`.  Anyway, we
+won't really be using those zippers to traverse lists, mostly as a way to
+describe focus on an element, so we should be fine!
+
+We can add main phase moves using those `Zipper`s:
+
+{% highlight haskell %}
+
+data Move (phase :: Phase) where
+  ...
+  NormalSummon ::
+    In phase '[ 'Main ] =>
+    Zipper Card Card -> Position -> Move phase
+  SwitchPosition ::
+    In phase '[ 'Main ] =>
+    Zipper (Space 'IsMonsterCard) ScopedSpace -> Move phase
+
+{% endhighlight %}
+
+Eventually, we will even refine the zipper in the `NormalSummon` constructor to
+restrict its focus to monster cards, but since we only have monster cards at the
+moment, no need to.  However, notice how `SwitchToAttackPosition` clearly
+enforces that the zipper it receives is focused on a monster card.
+
+Now, to compute the valid moves in the main phase, we need to consider several
+possibilities:
+
+{% highlight haskell %}
+
+validMoves :: ( GameEffects e ) => Eff e [Move 'Main]
+validMoves = do
+  currentPlayerHasNormalSummoned <- getLensed L.currentPlayerHasNormalSummoned
+  currentPlayerMainMonsterZone   <- getLensed L.currentPlayerMainMonsterZone
+  currentPlayerHand              <- getLensed L.currentPlayerHand
+
+  let normalSummonMoves =
+        if not currentPlayerHasNormalSummoned
+           && any isEmpty currentPlayerMainMonsterZone
+        then [ NormalSummon zipper position
+             | zipper <- allZippers currentPlayerHand
+             , let monster = view cursor zipper
+             , view level monster <= 4
+             , position <- [ Attack, FaceDownDefense ]
+             ]
+        else []
+
+  let switchPositionMoves =
+        [ SwitchPosition zipper
+        | zipper <- monsterZippers currentPlayerMainMonsterZone
+        , let monster = view cursor zipper
+        , not $ view hasSwitchedPosition monster
+        ]
+
+  return $
+    [ Move.EndMainPhase ]
+    ++ normalSummonMoves
+    ++ switchPositionMoves
+
+{% endhighlight %}
+
+A player is able to normal summon a monster when they haven't done so yet this
+turn, and when the monster's level is less than 4.  They can choose to summon
+the monster in either `Attack`, or `FaceDownDefense` positions.  They may also
+switch the position of monsters in the main monster zone, but only once per
+monster in a given turn.
+
+Note that I created a whole lot of lenses in a module called `Lenses` and import
+qualified as `L`.  This way, we can reuse the name `currentPlayerHand` for the
+result of viewing the lens without shadowing the lens itself.
+
+The `monsterZippers` is a utility that takes a list of `Space`s, and returns a
+list of `MonsterZipper`s, for only those spaces that contain monsters.  We can
+then define the mechanics of the main phase:
+
+{% highlight haskell %}
+
+mainPhase :: ( GameEffects e ) => Eff e (Maybe Victory)
+mainPhase = validMoves >>= GameEffects.chooseMove >>= \case
+
+  Move.EndMainPhase -> do
+    setLensed L.phase End
+    log Log.EndMainPhase
+    return Nothing
+
+  Move.EndTurn -> endTurn
+
+  Move.NormalSummon handZipper position -> do
+    currentPlayer                <- getLensed L.currentPlayer
+    currentPlayerMainMonsterZone <- getLensed L.currentPlayerMainMonsterZone
+
+    let card           = view cursor handZipper
+    let cardToSummon   = summonMonster card position
+    let restOfHand     = toListWithCursorDeleted handZipper
+    let summonZipper   =
+          case anyEmptyZipper currentPlayerMainMonsterZone of
+          Nothing     -> error "Tried to normal summon, but no empty space"
+          Just zipper -> zipper
+    let summonedZipper = set cursor cardToSummon summonZipper
+
+    setLensed L.currentPlayerMainMonsterZone   $ monsterZipperToList summonedZipper
+    setLensed L.currentPlayerHand              $ restOfHand
+    setLensed L.currentPlayerHasNormalSummoned $ True
+
+    log $ NormalSummoned currentPlayer summonedZipper
+    return Nothing
+
+  Move.SwitchPosition monsterZipper -> do
+    currentPlayer                <- getLensed L.currentPlayer
+
+    let monsterZipper'     = over cursor switchPosition monsterZipper
+    let newMainMonsterZone = monsterZipperToList monsterZipper
+
+    setLensed L.currentPlayerMainMonsterZone newMainMonsterZone
+
+    log $ SwitchedPosition currentPlayer monsterZipper'
+    return Nothing
+
+{% endhighlight %}
+
+Handling `NormalSummon` is the hardest part.  We need to extract the card being
+played from the player's hand, and find an empty space in their main monster zone to
+put the card in.  Something neat happens when define `summonedZipper`: the
+original zipper, `summonZipper`, is an `EmptyZipper`, but the result is a
+`MonsterZipper`.  This is possible because lenses allow their setters to change
+the type of what they are looking at.  It's often the case that we don't use
+this, but it's nice for such cases!
+
+To switch a monster's position, we just switch its position in the incoming
+zipper, and set the main monster zone to the result of this operation.  For now,
+we are assuming that the main monster zone does not change between when the
+`SwitchPosition` is requested and when it is processed.  If, eventually, we get
+rid of this assumption, then we should change this code to instead retrieve the
+monster zone at this moment, figure out if the incoming zipper is still relevant
+or not, etc.  We will leave this for later.
+
+Choosing a move: an effect with multiple possible interpretations
+-----------------------------------------------------------------
+
+Let's now look at this `GameEffects.chooseMove` I glossed over.  The power of
+extensible effects is the ability to define your own effects as data types.
+Here, we describe what it means to choose a move:
+
+{% highlight haskell %}
+
+data ChooseMove a where
+  ChooseMove :: Duel -> [Move p] -> ChooseMove (Move p)
+
+{% endhighlight %}
+
+Choosing a move is an effect that will require a `Duel` and a list of valid
+moves as input, and will (somehow!?) return one move.  We can make a nice little
+accessor that lets us use this in code that has a `ChooseMove` effect
+constraint:
+
+{% highlight haskell %}
+
+chooseMove :: ( Member ChooseMove e ) => Duel -> [Move p] -> Eff e (Move p)
+chooseMove duel validMoves = send $ ChooseMove duel validMoves
+
+{% endhighlight %}
+
+But how should this choice be handled?  Well, we will want several handlers
+depending on situations, and that's where effect handlers come in the picture.
+Both the handlers I care about will need to run as `IO`, so I can extract the
+common part of dispatching the effect to an `IO` action:
+
+{% highlight haskell %}
+
+runChooseMoveIO :: (forall b. ChooseMove b -> IO b) -> Eff '[ChooseMove] a -> IO a
+runChooseMoveIO _           (Val x) = return x
+runChooseMoveIO howToHandle (E u q) = case decomp u of
+     Right command -> do
+       chosenMove <- howToHandle command
+       runChooseMoveIO howToHandle (q ^$ chosenMove)
+     Left _ -> throwIO Impossible
+
+{% endhighlight %}
+
+You don't need to understand most of this, it's how custom effects are handled.
+Now, the first handler I want is one that prompts the user of the program to
+pick a move within the valid moves list:
+
+{% highlight haskell %}
+
+handleChooseMoveIO :: ChooseMove a -> IO a
+handleChooseMoveIO (ChooseMove duel validMoves) = do
+  let currentPlayerHand = view L.currentPlayerHand duel
+  let currentPlayerMat  = view L.currentPlayerMat  duel
+  let otherPlayerMat    = view L.otherPlayerMat    duel
+  let prompt            = [i|
+Other player's mat:
+#{Mat.display (DisplayDeck False) otherPlayerMat}
+Current player's mat:
+#{Mat.display (DisplayDeck False) currentPlayerMat}
+Current player's hand:
+#{displayList Card.display currentPlayerHand}
+Choose a move among the following ones.
+|]
+  let options           = mapWithIndex (\ index move -> (Move.display move, index)) validMoves
+  moveIndex <- promptForOption prompt options
+  let chosenMove = validMoves !! moveIndex
+  putStrLn [i|Chosen move: #{Move.display chosenMove}|]
+  return chosenMove
+
+{% endhighlight %}
+
+That's a lot of code!  But really, it's mostly printing out a lot of text on the
+screen.  In fact, most of the logic of talking to the user is hidden in the
+helper `promptForOption`, it's not very interesting so I will not discuss it further.
+
+Eventually, when we obtain a valid index from our user, we fetch the `chosenMove`
+suitably, and run the "continuation" `q` with it as input.  Let's now see a
+second way of handling the same effect: instead of a user, we will have a random
+number generator pick any valid move it wants:
+
+{% highlight haskell %}
+
+handleChooseMoveRandom :: ChooseMove a -> IO a
+handleChooseMoveRandom (ChooseMove _ validMoves) = do
+  let len = length validMoves
+  when (len == 0) $ fail "No valid move!"
+  moveIndex <- randomRIO (0, len - 1)
+  let chosenMove = validMoves !! moveIndex
+  return chosenMove
+
+{% endhighlight %}
+
+And that's it!  We can now wrap everything up:
+
+{% highlight haskell %}
+
+data ChooseMoveHandler
+  = Manually
+  | Randomly
+
+getChooseMoveHandler :: ChooseMoveHandler -> (forall a. ChooseMove a -> IO a)
+getChooseMoveHandler = \case
+  Manually -> handleChooseMoveIO
+  Randomly -> handleChooseMoveRandom
+
+main :: IO ()
+main = do
+  putStrLn "IT'S TIME... TO D-D-D-DUEL!"
+  let prompt = "How do you wish to play the game?"
+  let options =
+        [ ("Manually (you pick moves for both players)",              Manually)
+        , ("Randomly (computer picks random moves for both players)", Randomly)
+        ]
+  chooseMoveHandlerDescriptor <- promptForOption prompt options
+  let chooseMoveHandler = getChooseMoveHandler chooseMoveHandlerDescriptor
+  (victory, duelLog) <- runChooseMoveIO chooseMoveHandler $ runDuel setoKaiba yamiYugi
+  forM_ duelLog (putStrLn . Log.display)
+  putStrLn $ Victory.display victory
+
+{% endhighlight %}
+
+We use `promptForOption` again to force the user to pick one of the two
+handlers.  Then, we just pass the appropriate handler to `runChooseMoveIO`.
+We can now play the game manually, or have a random play happen:
+
+{% highlight bash %}
+
+$ stack build && stack exec yugioh
+
+IT'S TIME... TO D-D-D-DUEL!
+How do you wish to play the game?
+* 1. Manually (you pick moves for both players)
+* 2. Randomly (computer picks random moves for both players)
+2
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw phase ended
+Main phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw phase ended
+Yami Yugi normal summoned Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] (at 0) in Attack position
+Main phase ended
+Turn ended
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw phase ended
+Main phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw phase ended
+Yami Yugi normal summoned Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] (at 1) in Face-Down Defense position
+Main phase ended
+Turn ended
+Seto Kaiba drew card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500]
+Seto Kaiba added card Blue Eyes White Dragon [Light] (Dragon Lv.8) [3000/2500] to their hand
+Draw phase ended
+Main phase ended
+Turn ended
+Yami Yugi drew card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500]
+Yami Yugi added card Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] to their hand
+Draw phase ended
+Yami Yugi switched Beaver Warrior [Earth] (BeastWarrior Lv.4) [1200/1500] (at 0) to Face-Up Defense position
+Main phase ended
+Turn ended
+Yami Yugi won: Opponent ran out of cards
+
+{% endhighlight %}
+
+Still a somewhat sub-par duel, but we're laying the foundations.  Next time,
+let's add a battle phase!
