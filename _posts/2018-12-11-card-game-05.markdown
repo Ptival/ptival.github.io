@@ -1,0 +1,266 @@
+---
+layout: post
+title: "Creating a card game in Haskell (part 5)"
+date: 2018-12-11 00:38:00 -0700
+permalink: card-game-05
+comments: true
+categories:
+---
+
+This post is part of a series.
+- [Initial post](https://ptival.github.io/card-game-01)
+- [Previous post](https://ptival.github.io/card-game-04)
+
+[Source code for this post](https://github.com/Ptival/yugioh/tree/8c083bb8639ff1f70f2844730eb44fe939c4912f)
+
+Battle phase
+------------
+
+Let us now add a battle phase.  For this, we will need a couple new `Move`s:
+
+{% highlight haskell %}
+
+data Move (phase :: Phase) where
+  ...
+  Attack         :: In phase '[ 'Battle ]              => MonsterSpace -> MonsterSpace -> Move phase
+  DirectAttack   :: In phase '[ 'Battle ]              => MonsterSpace ->                 Move phase
+  EndBattlePhase :: In phase '[ 'Battle ]              =>                                 Move phase
+
+{% endhighlight %}
+
+as well as a couple new `Entry`s for our `Log`:
+
+{% highlight haskell %}
+
+data Entry
+  = ...
+  | Attacked         Player MonsterSpace Player MonsterSpace
+  | DamageInflicted  Player Int
+  | Destroyed        Player MonsterSpace
+  | DirectAttacked   Player MonsterSpace Player
+  | EndBattlePhase
+  | SentToGraveyard  Player Card
+
+{% endhighlight %}
+
+Before we can define the battle phase, there is a problem we need to solve.
+Monsters on the battle field must be identifiable uniquely, but so far, they are
+only given a card and a battle position.  How will we be able to distinguish
+between two copies of the same card?
+
+You might think that a test for equality is enough, since two observationally
+equal cards should be interchangeable.  Unfortunately, we will eventually
+add rules to the game such that a card could be destroyed, and an
+observationally equal card be summoned by some effect, and these two cards
+should not be considered the same.
+
+It seems we need some sort of identifier for every card that enters into play,
+so that we can unambiguously refer to it.  We can achieve this by adding an
+identifier field to our monster.  While we're at it, let's also add a boolean
+to keep track of whether a card has attacked this turn.
+
+{% highlight haskell %}
+
+data Space a where
+  Empty       :: Space 'IsEmpty
+  MonsterCard ::
+    { _hasAttacked         :: Bool       {- NEW -}
+    , _hasSwitchedPosition :: Bool
+    , _identifier          :: Identifier {- NEW -}
+    , _monsterCard         :: Card
+    , _monsterPosition     :: Position
+    } ->
+    Space 'IsMonsterCard
+
+hasAttacked :: Lens' MonsterSpace Bool
+hasAttacked = lens _hasAttacked (\ s new -> s { _hasAttacked = new })
+
+{% endhighlight %}
+
+Goodbye zippers!
+----------------
+
+It turns out the zippers from the previous post are indeed going to be a problem
+if a monster changes between the time the zipper is created and the time it is
+used.  Instead, now that cards on the battle field have identifiers, it suffices
+to remember the identifier of a card.  If no card with said identifier is found,
+the card must have been destroyed or returned to their owner's hand.  Here is
+how we define the valid moves for the battle phase:
+
+{% highlight haskell %}
+
+validMoves :: ( GameEffects e ) => Eff e [Move 'Battle]
+validMoves = do
+  currentPlayerMainMonsterZone <- getLensed L.currentPlayerMainMonsterZone
+  otherPlayerMainMonsterZone   <- getLensed L.otherPlayerMainMonsterZone
+
+  let attackMoves = [ Move.Attack sourceMonster targetMonster
+                    | sourceMonster <- S.monsterSpaces currentPlayerMainMonsterZone
+                    , S.isInAttackPosition sourceMonster
+                    , not $ view S.hasAttacked sourceMonster
+                    , targetMonster <- S.monsterSpaces otherPlayerMainMonsterZone
+                    ]
+
+  let directAttackMoves = [ Move.DirectAttack sourceMonster
+                          | length (S.monsterSpaces otherPlayerMainMonsterZone) == 0
+                          , sourceMonster <- S.monsterSpaces currentPlayerMainMonsterZone
+                          , S.isInAttackPosition sourceMonster
+                          , not $ view S.hasAttacked sourceMonster
+                          ]
+
+  return $ []
+    ++ attackMoves
+    ++ directAttackMoves
+    ++ [ Move.EndBattlePhase, Move.EndTurn ]
+
+{% endhighlight %}
+
+Every monster in attack position controlled by the current player may attack
+once.  If the other player has monsters, they must be defeated.  If the other
+player does not have monsters, the current player's monsters may attack his
+life points directly.  The battle phase proceeds as follows:
+
+{% highlight haskell %}
+
+battlePhase ::
+  GameEffects e =>
+  Eff e (Maybe Victory)
+battlePhase = validMoves >>= GameEffects.chooseMove >>= \case
+
+  Move.Attack sourceMonster targetMonster -> do
+    sourcePlayer <- getLensed L.currentPlayer
+    targetPlayer <- getLensed   L.otherPlayer
+
+    overMonster L.currentPlayer sourceMonster $ set S.hasAttacked True
+    log $ Attacked sourcePlayer sourceMonster targetPlayer targetMonster
+
+    let sourceATK = view (S.monsterCard . attack)  sourceMonster
+
+    if S.isInAttackPosition targetMonster
+      then do
+      let targetATK = view (S.monsterCard . attack) targetMonster
+      case compare sourceATK targetATK of
+        -- When the source's attack is greater than the target's attack, the
+        -- target is destroyed, and damage is inflicted to the target player.
+        GT -> do
+          destroyMonster L.otherPlayer targetMonster
+          let damage = sourceATK - targetATK
+          DuelHelpers.inflictDamage L.otherPlayer damage
+
+        -- When the source's attack is equal to the target's attack, both
+        -- monsters are destroyed, but not damage is inflicted.
+        EQ -> do
+          destroyMonster L.currentPlayer sourceMonster
+          destroyMonster   L.otherPlayer targetMonster
+          return Nothing
+
+        -- When the source's attack is lower than the target's attack, the
+        -- source is destroyed, and damage is inflicted to the source player.
+        LT -> do
+          destroyMonster L.currentPlayer sourceMonster
+          let damage = targetATK - sourceATK
+          DuelHelpers.inflictDamage L.currentPlayer damage
+
+      -- target monster is in defense position
+      else do
+      overMonster L.otherPlayer targetMonster $ S.flip
+      let targetDEF = view (S.monsterCard . defense) targetMonster
+      case compare sourceATK targetDEF of
+        -- When the source's attack is greater than the target's defense, the
+        -- target is destroyed, but no damage is inflicted.
+        GT -> do
+          destroyMonster L.otherPlayer targetMonster
+          return Nothing
+
+        -- When the source's attack is equal to the target's defense, no card
+        -- is destroyed, and no damage is inflicted.
+        EQ -> do
+          return Nothing
+
+        -- When the source's attack is lower than the target's defense, no card
+        -- is destroyed, but damage is inflicted to the source player.
+        LT -> do
+          let damage = targetDEF - sourceATK
+          DuelHelpers.inflictDamage L.currentPlayer damage
+
+  Move.DirectAttack sourceMonster -> do
+    overMonster L.currentPlayer sourceMonster $ set S.hasAttacked True
+    let sourceATK = view (S.monsterCard . attack)  sourceMonster
+    DuelHelpers.inflictDamage L.currentPlayer sourceATK
+
+  Move.EndBattlePhase -> do
+    setLensed phase End
+    log Log.EndBattlePhase
+    return Nothing
+
+  Move.EndTurn -> endTurn
+
+{% endhighlight %}
+
+There are essentially six different situations for the `Attack` move, for every
+combination of position of the monster being attacked, and of the comparison
+between the attacking monster's attack, and the value used to counter this
+attack.
+
+When the attacking monster fights a monster also in attack position, the monster
+with smaller attack gets destroyed, and the difference is inflicted as damage to
+the player controlling it.  If the attacks are equal, they are both destroyed.
+
+When the attacking monster fights a monster in defense position, it is first
+flipped face up.  Then, the monster gets destroyed only when it defense is
+strictly smaller, but its owner does not take damage.  However, if the defense
+is stricly higher, the attacking monster's player receives the difference as
+damage.  We use some helpers to destroy a monster and inflict damage:
+
+{% highlight haskell %}
+
+destroyMonster ::
+  GameEffects e =>
+  Lens' Duel Player -> MonsterSpace -> Eff e ()
+destroyMonster playerLens monster = do
+  player <- getLensed playerLens
+  overLensed (playerLens . mat . mainMonsterZone) $ map (Space.destroyMonster monster)
+  sendToGraveyard playerLens $ view monsterCard monster
+  log $ Destroyed player monster
+
+inflictDamage ::
+  GameEffects e =>
+  Lens' Duel Player -> Int -> Eff e (Maybe Victory)
+inflictDamage player damage = do
+  overLensed player $ Player.inflictDamage damage
+  damagedPlayer           <- getLensed player
+  damagedPlayerLifePoints <- getLensed (player . lifePoints)
+  log $ DamageInflicted damagedPlayer damage
+  return $ if damagedPlayerLifePoints == 0
+    then Just $ makeVictory damagedPlayer OpponentLPReducedToZero
+    else Nothing
+
+sendToGraveyard ::
+  GameEffects e =>
+  Lens' Duel Player -> Card -> Eff e ()
+sendToGraveyard playerLens card = do
+  player <- getLensed playerLens
+  overLensed (playerLens . mat . graveyard) $ (:) card
+  log $ SentToGraveyard player card
+
+{% endhighlight %}
+
+For now, we have simplified the battle phase a lot.  In the real rules, it
+actually bounces between a battle phase, where a given attack is declared, and a
+damage phase, where the consequences of the attack are calculated.  The damage
+phase itself consists in multiple steps, within which damage is first
+calculated, then monsters are determined to be destroyed, and only after
+some effects may be applied are the monsters finally sent to the graveyard.
+
+`inflictDamage` also checks for a new victory condition: when the player
+receiving damage has their life points drop to zero.
+
+{% highlight haskell %}
+data VictoryCondition
+  = ...
+  | OpponentLPReducedToZero
+{% endhighlight %}
+
+That's it for today, there are a couple other changes in the code, but nothing
+really worth mentioning.  Next time, I think I'll add tribute summoning, but
+things will start becoming really interesting when we add spells and traps!
