@@ -577,5 +577,5 @@ Yami Yugi won: Opponent ran out of cards
 
 {% endhighlight %}
 
-Still a somewhat sub-par duel, but we're laying the foundations.  Next time,
-let's add a battle phase!
+Still a somewhat sub-par duel, but we're laying the foundations.  [Next
+time](https://ptival.github.io/card-game-05), let's add a battle phase!
