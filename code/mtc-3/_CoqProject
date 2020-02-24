@@ -1,0 +1,35 @@
+-arg -impredicative-set
+
+-Q . MTC
+
+Hacks.v
+
+### Theory
+Algebra.v
+Functor.v
+# IndexedAlgebra.v
+# IndexedFunctor.v
+# IndexedSubFunctor.v
+# IndexedSum1.v
+SubFunctor.v
+Sum1.v
+
+### Extensible functions and relations
+Eval.v
+Soundness.v
+TypeEquality.v
+TypeOf.v
+WellTypedValue.v
+WellTypedValueProjection.v
+
+### Types
+BooleanType.v
+NaturalType.v
+
+### Features
+Boolean.v
+Natural.v
+Stuck.v
+
+### Demo
+Demo.v
