@@ -8,7 +8,10 @@ categories:
 ---
 
 NOTE: The code for this post is located
-[here](TODO)
+[here](https://gist.github.com/Ptival/1d81188dc936674716f4bbc00eec1e36).  Sadly,
+files are sorted alphabetically, you can click "Download ZIP" to get them
+locally.  All code snippets where it is relevant are annotated with the file
+they came from.
 
 In the previous episode...
 --------------------------
