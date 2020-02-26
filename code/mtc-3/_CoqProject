@@ -7,10 +7,10 @@ Hacks.v
 ### Theory
 Algebra.v
 Functor.v
-# IndexedAlgebra.v
-# IndexedFunctor.v
-# IndexedSubFunctor.v
-# IndexedSum1.v
+IndexedAlgebra.v
+IndexedFunctor.v
+IndexedSubFunctor.v
+IndexedSum1.v
 SubFunctor.v
 Sum1.v
 
