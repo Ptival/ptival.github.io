@@ -16,6 +16,7 @@ From MTC Require Import
      SubFunctor
      TypeOf
      WellTypedValue
+     WellTypedValueProj1Type
      WellTypedValueProjection
 .
 
@@ -29,8 +30,9 @@ Arguments MkNatural {E}.
 Arguments Plus      {E}.
 
 Global Instance Functor__Natural
-  : Functor Natural
-  :=
+  : Functor Natural.
+Proof.
+  refine
     {|
       fmap :=
         fun _ _ f v =>
@@ -39,30 +41,61 @@ Global Instance Functor__Natural
           | Plus a b    => Plus (f a) (f b)
           end
     |}.
+  - move => ? [] //.
+  - move => ????? [] //.
+Defined.
 
-Definition natural
-           {E} `{Functor E} `{E supports Natural}
-           (n : nat)
-  : Fix E
-  := injectF (MkNatural n).
+Section Natural.
 
-Definition plus
-           {E} `{Functor E} `{E supports Natural}
-           (a b : Fix E)
-  : Fix E
-  := injectF (Plus a b).
+  Context
+    {E}
+    `{Functor E}
+    `{E supports Natural}
+  .
 
-Definition isNatural
-           {E} `{Functor E} `{E supports Natural}
-  : Fix E -> option nat
-  := fun v =>
-       match projectF v with
-       | Some (MkNatural n) => Some n
-       | _                  => None
-       end.
+  Definition naturalExpression
+             (n : nat)
+    : Expression E
+    := injectUP' (MkNatural n).
+
+  Definition natural
+             (n : nat)
+    : Fix E
+    := proj1_sig (naturalExpression n).
+
+  Global Instance UP'__natural
+         (n : nat)
+    : UP' (natural n)
+    := proj2_sig (naturalExpression n).
+
+  Definition plusExpression
+             (a b : Expression E)
+    : Expression E
+    := injectUP' (Plus a b).
+
+  Definition plus
+             (a b : Expression E)
+    : Fix E
+    := proj1_sig (plusExpression a b).
+
+  Global Instance UP'__plus
+             (a b : Expression E)
+    : UP' (plus a b)
+    := proj2_sig (plusExpression a b).
+
+  Definition isNatural
+    : Fix E -> option nat
+    := fun v =>
+         match projectUP' v with
+         | Some (MkNatural n) => Some n
+         | _                  => None
+         end.
+
+End Natural.
 
 Global Instance Eval__Natural
-       {R} `{Functor R}
+       {R}
+       `{Functor R}
        `{R supports Natural}
        `{R supports Stuck}
   : ProgramAlgebra ForEval Natural (EvalResult R)
@@ -71,13 +104,15 @@ Global Instance Eval__Natural
       programAlgebra :=
         fun _ rec n =>
           match n with
-          | MkNatural n => natural n
+          | MkNatural n => naturalExpression n
           | Plus a b    =>
-            match (isNatural (rec a), isNatural (rec b)) with
-            | (Some na, Some nb) => natural (na + nb)
-            | (None,    Some _)  => stuck LeftAddendNotNatural
-            | (Some _,  None)    => stuck RightAddendNotNatural
-            | (None,    None)    => stuck NeitherAddendNatural
+            let v__a := proj1_sig (rec a) in
+            let v__b := proj1_sig (rec b) in
+            match (isNatural v__a, isNatural v__b) with
+            | (Some na, Some nb) => naturalExpression (na + nb)
+            | (None,    Some _)  => stuckExpression LeftAddendNotNatural
+            | (Some _,  None)    => stuckExpression RightAddendNotNatural
+            | (None,    None)    => stuckExpression NeitherAddendNatural
             end
           end
     |}.
@@ -90,16 +125,18 @@ Global Instance TypeOf__Natural
       programAlgebra :=
         fun _ rec v =>
           match v with
-          | MkNatural _ => Some naturalType
+          | MkNatural _ => Some naturalTypeExpression
           | Plus a b =>
             match (rec a, rec b) with
             | (Some tau__a, Some tau__b) =>
+              let tau__a := proj1_sig tau__a in
+              let tau__b := proj1_sig tau__b in
               if (isNaturalType tau__a && isNaturalType tau__b)%bool
-              then Some naturalType
+              then Some naturalTypeExpression
               else None
             | _ => None
             end
-      end
+          end
       ;
     |}.
 
@@ -112,8 +149,8 @@ Inductive WellTypedValue__Natural
   : TypedExpr T E -> Prop
   :=
   | WellTypedValue__natural : forall tau e b,
-      e = natural b ->
-      tau = naturalType ->
+      proj1_sig e = natural b ->
+      proj1_sig tau = naturalType ->
       WellTypedValue__Natural WTV {| type := tau; expr := e |}
 .
 
@@ -125,8 +162,10 @@ Global Instance IndexedFunctor__WellTypedValue__Natural
   : IndexedFunctor (TypedExpr T V) WellTypedValue__Natural.
 Proof.
   constructor.
-  move => A B i IH [] t v n -> -> .
-  econstructor => //; apply IH => //.
+  move => A B i IH [] [t +] [v +] n /= EQ__v EQ__t.
+  move : EQ__v -> .
+  move : EQ__t -> .
+  econstructor => //.
 Qed.
 
 (**
@@ -143,8 +182,8 @@ Definition WellTypedValueInversionClear__Natural
            (P : (TypedExpr T V)-indexedPropFunctor)
            (IH : forall tau v b,
                {| type := tau; expr := v |} = tv ->
-               v = natural b ->
-               tau = naturalType ->
+               proj1_sig v = natural b ->
+               proj1_sig tau = naturalType ->
                P WellTypedValue__V {| type := tau; expr := v |})
            (WT : WellTypedValue__Natural WellTypedValue__V tv)
   : P WellTypedValue__V tv
@@ -171,8 +210,8 @@ Global Instance WellTypedValueProjection__Natural
       ).
 Proof.
   constructor.
-  move => tv [] t v n ? ?.
-  apply : (WellTypedValue__natural _ _ _ n) => //.
+  move => tv [] t v n ? ? ?.
+  eapply WellTypedValue__natural; eauto.
 Qed.
 
 Lemma Soundness__natural
@@ -189,25 +228,17 @@ Lemma Soundness__natural
       `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult   V)}
       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult T)}
 
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Natural}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Natural}
-  : forall (n : nat),
-    forall tau,
-      typeOf (natural n) = Some tau ->
-      IndexedFix
-        WTV
-        {|
-          type := tau;
-          expr := eval (natural n);
-        |}.
+      `{! WellFormedCompoundProgramAlgebra Eval__E   Eval__Natural}
+      `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Natural}
+  : forall (n : nat), SoundnessStatement WTV (natural n) (UP'__natural n).
 Proof.
-  rewrite /=.
+  rewrite /SoundnessStatement.
   move => n tau.
   rewrite /typeOf /eval /natural /=.
-  rewrite /mendlerFold /injectF /=.
-  rewrite /wrapF.
-  rewrite wellFormedCompoundProgramAlgebra /=.
-  rewrite wellFormedCompoundProgramAlgebra /=.
+  rewrite /mendlerFold.
+  rewrite /wrapF /=.
+  rewrite wellFormedSubFunctor.
+  rewrite ! wellFormedCompoundProgramAlgebra /=.
   move => [] <- .
   apply indexedWrapF.
   apply indexedInject.
@@ -222,11 +253,11 @@ Lemma Soundness__plus
       `{V supports Natural}
       `{V supports Stuck}
       (WTV : (TypedExpr T V)-indexedPropFunctor)
-      `((WTV supports WellTypedValue__Natural)%IndexedSubFunctor)
+      `{(WTV supports WellTypedValue__Natural)%IndexedSubFunctor}
       `{Eval__E : ProgramAlgebra ForEval E (EvalResult V)}
       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult T)}
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Natural}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Natural}
+      `{! WellFormedCompoundProgramAlgebra Eval__E Eval__Natural}
+      `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Natural}
 
       `{! IndexedFunctor (TypedExpr T V) WTV}
 
@@ -238,47 +269,46 @@ Lemma Soundness__plus
                                              WTV)
        }
 
-  : forall (a b : sig (SoundnessStatement WTV)),
-    let a := proj1_sig a in
-    let b := proj1_sig b in
-    forall tau,
-      typeOf (plus a b) = Some tau ->
-      IndexedFix
-        WTV
-        {|
-          type := tau;
-          expr := eval (plus a b);
-        |}.
+  : forall (a b : sig (PropUP' (SoundnessStatement WTV))),
+    let expr__a := exist _ (proj1_sig a) (proj1_sig (proj2_sig a)) in
+    let expr__b := exist _ (proj1_sig b) (proj1_sig (proj2_sig b)) in
+    SoundnessStatement
+      WTV
+      (plus expr__a expr__b)
+      _.
 Proof.
   rewrite /=.
-  move => [a IH__a] [b IH__b].
+  move => [a [UP'__a IH__a]] [b [UP'__b IH__b]].
+  rewrite /proj1_sig /proj2_sig.
   move : IH__a IH__b.
   rewrite {1 2}/SoundnessStatement.
-  rewrite /eval /typeOf /plus /mendlerFold /injectF /wrapF.
   move => IH__a IH__b.
-  rewrite wellFormedCompoundProgramAlgebra => /=.
-  rewrite wellFormedCompoundProgramAlgebra => /=.
-  case TO__a : (mendlerFold _ a) => [ tau__a | ] //.
+  rewrite /SoundnessStatement.
+  rewrite /eval /typeOf /plus /mendlerFold /plusExpression.
+  rewrite /injectUP' /wrapUP' /wrapF /=.
+  rewrite wellFormedSubFunctor.
+  rewrite ! wellFormedCompoundProgramAlgebra /=.
+  rewrite -/eval -/typeOf.
+  case TO__a : (typeOf a) => [ [tau__a UP'__tau__a] | ] //.
   move : IH__a (IH__a _ TO__a) => _ WT__a.
-  case TO__b : (mendlerFold _ b) => [ tau__b | ] //.
+  case TO__b : (typeOf b) => [ [tau__b UP'__tau__b] | ] //.
   move : IH__b (IH__b _ TO__b) => _ WT__b.
-  move => tau.
-  rewrite / isNaturalType.
-  case p__a : (projectF tau__a) => [ [] | ] //.
-  case p__b : (projectF tau__b) => [ [] | ] //.
-  move => [] <- .
-  have := !! projectF_injectF p__a => {}p__a.
-  have := !! projectF_injectF p__b => {}p__b.
+  rewrite /isNaturalType /=.
+  case p__a : (projectUP' tau__a) => [ [] | ] //=.
+  case p__b : (projectUP' tau__b) => [ [] | ] //=.
+  move => tau [] <- .
+  have := !! projectSuccessUP' _ p__a => {}p__a.
+  have := !! projectSuccessUP' _ p__b => {}p__b.
   have := !! wellTypedValueProjection WellTypedValue__Natural _ _ _ WT__a p__a.
-  elim / @WellTypedValueInversionClear__Natural.
+  elim /@WellTypedValueInversionClear__Natural.
   have := !! wellTypedValueProjection WellTypedValue__Natural _ _ _ WT__b p__b.
-  elim / @WellTypedValueInversionClear__Natural.
-  rewrite /isNatural /projectF /mendlerFold.
+  elim /@WellTypedValueInversionClear__Natural.
   move => ? ? n__a [] -> -> -> _ .
   move => ? ? n__b [] -> -> -> _ .
-  rewrite /natural /injectF.
-  rewrite ! unwrapF_wrapF.
-  rewrite ! project_inject /=.
+  rewrite /isNatural /projectUP' /natural /naturalExpression /=.
+  rewrite !unwrapUP'_wrapF.
+  rewrite !wellFormedSubFunctor.
+  rewrite !project_inject /=.
   apply indexedWrapF.
   apply indexedInject.
   econstructor => //.
@@ -286,49 +316,54 @@ Defined.
 
 Definition Induction__Natural
            {E} `{Functor E} `{E supports Natural}
-           (P : Fix E -> Prop)
-           (H__natural : forall b, P (natural b))
+           (P : forall (e : Fix E), UP' e -> Prop)
+           (H__natural : forall b, PropUP' P (natural b))
            (H__plus :
-              forall (a b : sig P)
-                (IH__a : P (proj1_sig a))
-                (IH__b : P (proj1_sig b))
-              ,
-                P (plus (proj1_sig a) (proj1_sig b)))
-  : Algebra Natural (sig P)
+              forall {a b : Fix E}
+                (IH__a : PropUP' P a)
+                (IH__b : PropUP' P b),
+                PropUP' P (plus
+                             (exist _ _ (proj1_sig IH__a))
+                             (exist _ _ (proj1_sig IH__b))
+                          )
+           )
+  : Algebra Natural (sig (PropUP' P))
   := fun e =>
        match e with
        | MkNatural n => exist _ _ (H__natural n)
        | Plus a b =>
-         exist _ _ (H__plus _ _ (proj2_sig a) (proj2_sig b))
+         exist _ _ (H__plus (proj2_sig a) (proj2_sig b))
        end.
 
 Global Instance Soundness__Natural
-      {T E V}
-      `{Functor T} `{Functor E} `{Functor V}
-      `{T supports NaturalType}
-      `{E supports Natural}
-      `{V supports Natural}
-      `{V supports Stuck}
-      (WTV : (TypedExpr T V)-indexedPropFunctor)
-      `((WTV supports WellTypedValue__Natural)%IndexedSubFunctor)
-      `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult         V)}
-      `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult       T)}
+       {T E V}
+       `{Functor T} `{Functor E} `{Functor V}
+       `{T supports NaturalType}
+       `{E supports Natural}
+       `{V supports Natural}
+       `{V supports Stuck}
 
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Natural}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Natural}
+       (WTV : (TypedExpr T V)-indexedPropFunctor)
+       `{(WTV supports WellTypedValue__Natural)%IndexedSubFunctor}
 
-      `{! IndexedFunctor (TypedExpr T V) WTV}
+       `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult         V)}
+       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult       T)}
 
-      `{! IndexedProofAlgebra
-          ForWellTypedValueProjection WTV
-          (WellTypedValueProjectionStatement WellTypedValue__Natural
-                                             naturalType
-                                             WTV)
-       }
+       `{! WellFormedCompoundProgramAlgebra Eval__E Eval__Natural}
+       `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Natural}
+
+       `{! IndexedFunctor (TypedExpr T V) WTV}
+
+       `{! IndexedProofAlgebra
+           ForWellTypedValueProjection WTV
+           (WellTypedValueProjectionStatement WellTypedValue__Natural
+                                              naturalType
+                                              WTV)
+        }
 
   : ProofAlgebra ForSoundness
                  Natural
-                 (sig (SoundnessStatement (E := E) WTV)).
+                 (sig (PropUP' (SoundnessStatement (E := E) WTV))).
 Proof.
 
   constructor.
@@ -336,14 +371,56 @@ Proof.
 
   { (* [natural] case *)
     rewrite /SoundnessStatement.
-    eapply Soundness__natural => //.
+    rewrite /PropUP'.
+    move => n.
+    constructor.
+    {
+      apply (proj2_sig (naturalExpression n)).
+    }
+    {
+      eapply Soundness__natural => //.
+    }
   }
 
   { (* [plus] case *)
     rewrite /SoundnessStatement.
-    move => a b _ _ /=.
-    move => tau TO.
-    apply (Soundness__plus WTV _ a b) => //.
+    move => a b IH__a IH__b /=.
+    rewrite /PropUP'.
+    constructor.
+    {
+      apply (proj2_sig (plusExpression
+                          (exist _ _ (proj1_sig IH__a))
+                          (exist _ _ (proj1_sig IH__b))
+                       )
+            ).
+    }
+    {
+      apply : (Soundness__plus
+                 WTV
+                 (exist _ a IH__a)
+                 (exist _ b IH__b)
+              ).
+    }
   }
 
+Defined.
+
+Global Instance WellTypedValueProj1Type__Natural
+       {T V}
+       `{Functor T} `{Functor V}
+       `{T supports NaturalType}
+       `{V supports Natural}
+       (WellTypedValue__V : (TypedExpr T V)-indexedPropFunctor)
+       `{IndexedFunctor (TypedExpr T V) WellTypedValue__V}
+       `{! IndexedSubFunctor WellTypedValue__Natural WellTypedValue__V}
+  : IndexedProofAlgebra
+      ForWellTypedValueProj1Type
+      WellTypedValue__Natural
+      (WellTypedValueProj1TypeStatement WellTypedValue__V).
+Proof.
+  constructor.
+  move => tv [] [] ? + ? n ? /= N.
+  move : N => -> ??? /= ?.
+  apply (indexedInjectF WellTypedValue__Natural).
+  eapply WellTypedValue__natural; eauto.
 Defined.

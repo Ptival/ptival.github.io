@@ -5,10 +5,13 @@ From MTC Require Import
      IndexedFunctor
 .
 
-Record TypedExpr T E : Set :=
-  {
-    type : Fix T;
-    expr : Fix E;
-  }.
-Arguments type {T E}.
-Arguments expr {T E}.
+Record TypedExpr
+       T E
+       `{Functor T} `{Functor E}
+  :=
+    {
+      type : Expression T;
+      expr : Expression E;
+    }.
+Arguments type {T E _ _}.
+Arguments expr {T E _ _}.

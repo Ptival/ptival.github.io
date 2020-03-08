@@ -1,3 +1,7 @@
+From Coq Require Import
+     ssreflect
+.
+
 From MTC Require Import
      Algebra
      Functor
@@ -23,11 +27,34 @@ Inductive Stuck (E : Set) : Set :=
 Arguments MkStuck {E}.
 
 Global Instance Functor__Stuck
-  : Functor Stuck
-  := {| fmap := fun _ _ f '(MkStuck why) => MkStuck why |}.
+  : Functor Stuck.
+Proof.
+  refine {| fmap := fun _ _ f '(MkStuck why) => MkStuck why |}.
+  - move => ? [] //.
+  - move => ????? [] //.
+Defined.
 
-Definition stuck
-           {E} `{Functor E} `{E supports Stuck}
-           (why : Reason)
-  : Fix E
-  := injectF (MkStuck why).
+Section Stuck.
+
+  Context
+    {E}
+    `{Functor E}
+    `{E supports Stuck}
+  .
+
+  Definition stuckExpression
+             (why : Reason)
+    : Expression E
+    := injectUP' (MkStuck why).
+
+  Definition stuck
+             (why : Reason)
+    : Fix E
+    := proj1_sig (stuckExpression why).
+
+  Global Instance UP'__stuck
+         (why : Reason)
+    : UP' (stuck why)
+    := proj2_sig (stuckExpression why).
+
+End Stuck.

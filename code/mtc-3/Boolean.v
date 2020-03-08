@@ -17,6 +17,7 @@ From MTC Require Import
      TypeEquality
      TypeOf
      WellTypedValue
+     WellTypedValueProj1Type
      WellTypedValueProjection
 .
 
@@ -30,8 +31,9 @@ Arguments MkBoolean  {E}.
 Arguments IfThenElse {E}.
 
 Global Instance Functor__Boolean
-  : Functor Boolean
-  :=
+  : Functor Boolean.
+Proof.
+  refine
     {|
       fmap :=
         fun _ _ f v =>
@@ -40,43 +42,75 @@ Global Instance Functor__Boolean
           | IfThenElse c t e => IfThenElse (f c) (f t) (f e)
           end
     |}.
+  - move => ? [] //.
+  - move => ????? [] //.
+Defined.
 
-Definition boolean
-           {E} `{Functor E} `{E supports Boolean}
-           (b : bool)
-  : Fix E
-  := injectF (MkBoolean b).
+Section Boolean.
 
-Definition ifThenElse
-           {E} `{Functor E} `{E supports Boolean}
-           (c t e : Fix E)
-  : Fix E
-  := injectF (IfThenElse c t e).
+  Context
+    {E}
+    `{Functor E}
+    `{E supports Boolean}
+  .
 
-Definition isBoolean
-           {E} `{Functor E} `{E supports Boolean}
-  : Fix E -> option bool
-  := fun v =>
-       match projectF v with
-       | Some (MkBoolean b) => Some b
-       | _                  => None
-       end.
+  Definition booleanExpression
+             (b : bool)
+    : Expression E
+    := injectUP' (MkBoolean b).
+
+  Definition boolean
+             (b : bool)
+    : Fix E
+    := proj1_sig (booleanExpression b).
+
+  Global Instance UP'__boolean
+         (b : bool)
+    : UP' (boolean b)
+    := proj2_sig (booleanExpression b).
+
+  Definition ifThenElseExpression
+             (c t e : Expression E)
+    : Expression E
+    := injectUP' (IfThenElse c t e).
+
+  Definition ifThenElse
+             (c t e : Expression E)
+    : Fix E
+    := proj1_sig (ifThenElseExpression c t e).
+
+  Global Instance UP'__ifThenElse
+         (c t e : Expression E)
+    : UP' (ifThenElse c t e)
+    := proj2_sig (ifThenElseExpression c t e).
+
+  Definition isBoolean
+    : Fix E -> option bool
+    := fun v =>
+         match projectUP' v with
+         | Some (MkBoolean b) => Some b
+         | _                  => None
+         end.
+
+End Boolean.
 
 Global Instance Eval__Boolean
-       V `{Functor V}
-       `{V supports Boolean}
-       `{V supports Stuck}
-  : ProgramAlgebra ForEval Boolean (EvalResult V)
+       {E}
+       `{Functor E}
+       `{E supports Boolean}
+       `{E supports Stuck}
+  : ProgramAlgebra ForEval Boolean (EvalResult E)
   :=
     {|
       programAlgebra :=
         fun _ rec b =>
           match b with
-          | MkBoolean b      => boolean b
+          | MkBoolean b      => booleanExpression b
           | IfThenElse c t e =>
-            match isBoolean (rec c) with
+            let v__c := proj1_sig (rec c) in
+            match isBoolean v__c with
             | Some b => if b then rec t else rec e
-            | _      => stuck IfConditionNotBoolean
+            | _      => stuckExpression IfConditionNotBoolean
             end
           end
     |}.
@@ -88,17 +122,17 @@ Global Instance TypeOf__Boolean
   :=
     {|
       programAlgebra :=
-        fun _ rec v =>
+        fun _ (rec : _ -> option (Expression _)) v =>
           match v with
-          | MkBoolean _ => Some booleanType
+          | MkBoolean _ => Some booleanTypeExpression
           | IfThenElse c t e =>
             match rec c with
             | Some tau__c =>
-              if isBooleanType tau__c
+              if isBooleanType (proj1_sig tau__c)
               then
                 match (rec t, rec e) with
                 | (Some tau__t, Some tau__e) =>
-                  if typeEquality tau__t tau__e
+                  if typeEquality (proj1_sig tau__t) tau__e
                   then Some tau__t
                   else None
                 | _ => None
@@ -113,14 +147,14 @@ Global Instance TypeOf__Boolean
 Inductive WellTypedValue__Boolean
           {T E}
           `{Functor T} `{Functor E}
-          `{T supports BooleanType}
-          `{E supports Boolean}
+          `{! T supports BooleanType}
+          `{! E supports Boolean}
           (WTV : TypedExpr T E -> Prop)
   : TypedExpr T E -> Prop
   :=
   | WellTypedValue__boolean : forall tau e b,
-      e = boolean b ->
-      tau = booleanType ->
+      proj1_sig e = boolean b ->
+      proj1_sig tau = booleanType ->
       WellTypedValue__Boolean WTV {| type := tau; expr := e |}
 .
 
@@ -132,8 +166,10 @@ Global Instance IndexedFunctor__WellTypedValue__Boolean
   : IndexedFunctor (TypedExpr T V) WellTypedValue__Boolean.
 Proof.
   constructor.
-  move => A B i IH [] t v b -> -> .
-  econstructor => //; apply IH => //.
+  move => A B i IH [] [tau +] [e +] b /= EQ__e EQ__tau.
+  move : EQ__e -> .
+  move : EQ__tau -> .
+  econstructor => //.
 Qed.
 
 (**
@@ -150,8 +186,8 @@ Definition WellTypedValueInversionClear__Boolean
            (P : (TypedExpr T V)-indexedPropFunctor)
            (IH : forall tau v b,
                {| type := tau; expr := v |} = tv ->
-               v = boolean b ->
-               tau = booleanType ->
+               proj1_sig v = boolean b ->
+               proj1_sig tau = booleanType ->
                P WellTypedValue__V {| type := tau; expr := v |})
            (WT : WellTypedValue__Boolean WellTypedValue__V tv)
   : P WellTypedValue__V tv
@@ -178,8 +214,9 @@ Global Instance WellTypedValueProjection__Boolean
       ).
 Proof.
   constructor.
-  move => tv [] t v b ? ?.
-  apply : (WellTypedValue__boolean _ _ _ b) => //.
+  move => tv [] t v b B BT +.
+  rewrite /type => _.
+  eapply WellTypedValue__boolean; eauto.
 Qed.
 
 Lemma Soundness__boolean
@@ -191,23 +228,23 @@ Lemma Soundness__boolean
       `{V supports Stuck}
 
       (WTV : (TypedExpr T V)-indexedPropFunctor)
-      `((WTV supports WellTypedValue__Boolean)%IndexedSubFunctor)
+      `{(WTV supports WellTypedValue__Boolean)%IndexedSubFunctor}
 
       `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult   V)}
       `{TypeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult T)}
 
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Boolean}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Boolean}
-  : forall (b : bool), SoundnessStatement WTV (boolean b).
+      `{! WellFormedCompoundProgramAlgebra Eval__E   Eval__Boolean}
+      `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Boolean}
+  : forall (b : bool), SoundnessStatement WTV (boolean b) (UP'__boolean b).
 Proof.
   rewrite /SoundnessStatement.
   move => b tau.
   rewrite /typeOf /eval /boolean /=.
-  rewrite /mendlerFold /injectF /=.
-  rewrite /wrapF.
-  rewrite wellFormedCompoundProgramAlgebra /=.
-  rewrite wellFormedCompoundProgramAlgebra /=.
+  rewrite /mendlerFold.
+  rewrite /wrapF /=.
+  rewrite wellFormedSubFunctor.
+  rewrite ! wellFormedCompoundProgramAlgebra /=.
   move => [] <- .
   apply indexedWrapF.
   apply indexedInject.
@@ -221,13 +258,16 @@ Lemma Soundness__ifThenElse
       `{E supports Boolean}
       `{V supports Boolean}
       `{V supports Stuck}
+
       (WTV : (TypedExpr T V)-indexedPropFunctor)
-      `((WTV supports WellTypedValue__Boolean)%IndexedSubFunctor)
+      `{(WTV supports WellTypedValue__Boolean)%IndexedSubFunctor}
+
       `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult V)}
       `{TypeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult T)}
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Boolean}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Boolean}
+
+      `{! WellFormedCompoundProgramAlgebra Eval__E   Eval__Boolean}
+      `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Boolean}
 
       `{! IndexedFunctor (TypedExpr T V) WTV}
 
@@ -239,118 +279,191 @@ Lemma Soundness__ifThenElse
                                              WTV)
        }
 
-      `{! ProofAlgebra
-          ForTypeEqualityCorrectness
-          T
-          (sig TypeEqualityCorrectnessStatement)
+      `{! IndexedProofAlgebra
+          ForWellTypedValueProj1Type
+          WTV
+          (WellTypedValueProj1TypeStatement WTV)
        }
 
-  : forall (c t e : sig (SoundnessStatement WTV)),
-    let c := proj1_sig c in
-    let t := proj1_sig t in
-    let e := proj1_sig e in
-    SoundnessStatement WTV (ifThenElse c t e).
+      `{TypeEqualityCorrectness__T :
+          ! ProofAlgebra
+            ForTypeEqualityCorrectness
+            T
+            (sig (PropUP' TypeEqualityCorrectnessStatement))
+       }
+      `{! WellFormedProofAlgebra TypeEqualityCorrectness__T}
+
+  : forall (c t e : sig (PropUP' (SoundnessStatement WTV))),
+    let expr__c := exist _ (proj1_sig c) (proj1_sig (proj2_sig c)) in
+    let expr__t := exist _ (proj1_sig t) (proj1_sig (proj2_sig t)) in
+    let expr__e := exist _ (proj1_sig e) (proj1_sig (proj2_sig e)) in
+    SoundnessStatement
+      WTV
+      (ifThenElse expr__c expr__t expr__e)
+      _.
 Proof.
   rewrite {7}/SoundnessStatement /=.
-  move => [c IH__c] [t IH__t] [e IH__e].
+  move => [c [UP'__c IH__c]] [t [UP'__t IH__t]] [e [UP'__e IH__e]].
+  rewrite /proj1_sig /proj2_sig.
   move : IH__c IH__t IH__e.
   rewrite {1 2 3}/SoundnessStatement.
   move => IH__c IH__t IH__e.
-  rewrite /eval /typeOf /ifThenElse /mendlerFold /injectF /wrapF.
-  rewrite wellFormedCompoundProgramAlgebra => /=.
-  rewrite wellFormedCompoundProgramAlgebra => /=.
+  rewrite /SoundnessStatement.
+  rewrite /eval /typeOf /ifThenElse /mendlerFold /ifThenElseExpression.
+  rewrite /injectUP' /wrapUP' /wrapF /=.
+  rewrite wellFormedSubFunctor.
+  rewrite ! wellFormedCompoundProgramAlgebra /=.
   rewrite -/eval -/typeOf.
   case TO__c : (typeOf c) => [ tau__c | ] //.
   move : IH__c (IH__c _ TO__c) => _ WT__c.
-  case BT : (isBooleanType tau__c) => //.
-  case TO__t : (typeOf t) => [ tau__t | ] //.
+  case BT : (isBooleanType (proj1_sig tau__c)) => //.
+  case TO__t : (typeOf t) => [ [tau__t UP'__tau__t] | ] //.
   move : IH__t (IH__t _ TO__t) => _ WT__t.
-  case TO__e : (typeOf e) => [ tau__e | ] //.
+  case TO__e : (typeOf e) => [ [tau__e UP'__tau__e] | ] //.
   move : IH__e (IH__e _ TO__e) => _ WT__e.
   move => tau.
-  case TE : (typeEquality tau__t tau__e) => //.
+  case TE : (typeEquality tau__t (exist _ _ UP'__tau__e)) => //.
   move => [] <-.
   move : BT.
-  rewrite / isBooleanType.
-  case p__c : (projectF tau__c) => [ [] | ] // _.
-  have := !! projectF_injectF p__c => {}p__c.
+  rewrite /isBooleanType.
+  case p__c : (projectUP' (proj1_sig tau__c)) => [ [] | ] // _.
+  have := !! projectSuccessUP' (proj2_sig tau__c) p__c => {}p__c.
   have := !! wellTypedValueProjection WellTypedValue__Boolean _ _ _ WT__c p__c.
-  elim / @WellTypedValueInversionClear__Boolean.
+  elim /@WellTypedValueInversionClear__Boolean.
   move => ? ? b [] -> -> -> _ .
-  rewrite /isBoolean /projectF /mendlerFold.
-  rewrite /boolean /injectF.
-  rewrite unwrapF_wrapF.
+  rewrite /isBoolean /projectUP' /boolean /booleanExpression /=.
+  rewrite unwrapUP'_wrapF.
+  rewrite !wellFormedSubFunctor.
   rewrite project_inject /=.
   move : b => [] //.
-  have := !! typeEqualityCorrectness _ _ TE => -> .
-  apply WT__e.
+  have := !! typeEqualityCorrectness (exist _ _ UP'__tau__t) _ TE => TEC.
+  have := !! wellTypedValueProj1Type _ _ WT__e _ UP'__tau__t TEC => //.
 Defined.
 
 Definition Induction__Boolean
            {E} `{Functor E} `{E supports Boolean}
-           (P : Fix E -> Prop)
-           (H__boolean : forall b, P (boolean b))
+           (P : forall (e : Fix E), UP' e -> Prop)
+           (H__boolean : forall b, PropUP' P (boolean b))
            (H__ifThenElse :
-              forall (c t e : sig P),
-                let c := proj1_sig c in
-                let t := proj1_sig t in
-                let e := proj1_sig e in
-                P (ifThenElse c t e))
-  : Algebra Boolean (sig P)
+              forall {c t e : Fix E}
+                (IH__c : PropUP' P c)
+                (IH__t : PropUP' P t)
+                (IH__e : PropUP' P e),
+                PropUP' P (ifThenElse
+                             (exist _ _ (proj1_sig IH__c))
+                             (exist _ _ (proj1_sig IH__t))
+                             (exist _ _ (proj1_sig IH__e))
+                          )
+           )
+  : Algebra Boolean (sig (PropUP' P))
   := fun e =>
        match e with
        | MkBoolean b => exist _ _ (H__boolean b)
        | IfThenElse c t e =>
-         exist _ _ (H__ifThenElse c t e)
+         exist _ _ (H__ifThenElse (proj2_sig c) (proj2_sig t) (proj2_sig e))
        end.
 
 Global Instance Soundness__Boolean
-      {T E V}
-      `{Functor T} `{Functor E} `{Functor V}
-      `{T supports BooleanType}
-      `{E supports Boolean}
-      `{V supports Boolean}
-      `{V supports Stuck}
-      (WTV : (TypedExpr T V)-indexedPropFunctor)
-      `((WTV supports WellTypedValue__Boolean)%IndexedSubFunctor)
-      `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult         V)}
-      `{TypeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
-      `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult       T)}
+       {T E V}
+       `{Functor T} `{Functor E} `{Functor V}
+       `{T supports BooleanType}
+       `{E supports Boolean}
+       `{V supports Boolean}
+       `{V supports Stuck}
 
-      `{! WellFormedCompoundProgramAlgebra ForEval   E Boolean}
-      `{! WellFormedCompoundProgramAlgebra ForTypeOf E Boolean}
+       (WTV : (TypedExpr T V)-indexedPropFunctor)
+       `((WTV supports WellTypedValue__Boolean)%IndexedSubFunctor)
 
-      `{! IndexedFunctor (TypedExpr T V) WTV}
+       `{Eval__E         : ProgramAlgebra ForEval         E (EvalResult         V)}
+       `{TypeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
+       `{TypeOf__E       : ProgramAlgebra ForTypeOf       E (TypeOfResult       T)}
+
+      `{! WellFormedCompoundProgramAlgebra Eval__E   Eval__Boolean}
+      `{! WellFormedCompoundProgramAlgebra TypeOf__E TypeOf__Boolean}
+
+       `{! IndexedFunctor (TypedExpr T V) WTV}
+
+       `{! IndexedProofAlgebra
+           ForWellTypedValueProjection WTV
+           (WellTypedValueProjectionStatement WellTypedValue__Boolean
+                                              booleanType
+                                              WTV)
+        }
 
       `{! IndexedProofAlgebra
-          ForWellTypedValueProjection WTV
-          (WellTypedValueProjectionStatement WellTypedValue__Boolean
-                                             booleanType
-                                             WTV)
+          ForWellTypedValueProj1Type
+          WTV
+          (WellTypedValueProj1TypeStatement WTV)
        }
 
-      `{! ProofAlgebra
-          ForTypeEqualityCorrectness T
-          (sig TypeEqualityCorrectnessStatement)
-       }
+      `{TypeEqualityCorrectness__T :
+          ! ProofAlgebra
+            ForTypeEqualityCorrectness T
+            (sig (PropUP' TypeEqualityCorrectnessStatement))
+        }
+      `{! WellFormedProofAlgebra TypeEqualityCorrectness__T}
 
   : ProofAlgebra ForSoundness
                  Boolean
-                 (sig (SoundnessStatement (E := E) WTV)).
+                 { e : Fix E | PropUP' (SoundnessStatement WTV) e }.
 Proof.
   constructor.
   apply Induction__Boolean.
 
   { (* [boolean] case *)
     rewrite /SoundnessStatement.
-    eapply Soundness__boolean => //.
+    rewrite /PropUP' /=.
+    move => b.
+    constructor.
+    {
+      apply (proj2_sig (booleanExpression b)).
+    }
+    {
+      eapply Soundness__boolean => //.
+    }
   }
 
   { (* [ifThenElse] case *)
     rewrite /SoundnessStatement.
-    move => c t e /=.
-    move => tau TO.
-    apply (Soundness__ifThenElse WTV _ c t e) => //.
+    move => c t e IH__c IH__t IH__e /=.
+    rewrite /PropUP' /=.
+    constructor.
+    {
+      apply (proj2_sig (ifThenElseExpression
+                          (exist _ _ (proj1_sig IH__c))
+                          (exist _ _ (proj1_sig IH__t))
+                          (exist _ _ (proj1_sig IH__e))
+                       )
+            ).
+    }
+    {
+      apply : (Soundness__ifThenElse
+                 WTV
+                 (exist _ c IH__c)
+                 (exist _ t IH__t)
+                 (exist _ e IH__e)
+              ).
+    }
   }
 
+Defined.
+
+Global Instance WellTypedValueProj1Type__Boolean
+       {T V}
+       `{Functor T} `{Functor V}
+       `{T supports BooleanType}
+       `{V supports Boolean}
+       (WellTypedValue__V : (TypedExpr T V)-indexedPropFunctor)
+       `{IndexedFunctor (TypedExpr T V) WellTypedValue__V}
+       `{! IndexedSubFunctor WellTypedValue__Boolean WellTypedValue__V}
+  : IndexedProofAlgebra
+      ForWellTypedValueProj1Type
+      WellTypedValue__Boolean
+      (WellTypedValueProj1TypeStatement WellTypedValue__V).
+Proof.
+  constructor.
+  move => tv [] [] ? + ? b ? /= B.
+  move : B => -> ??? /= ?.
+  apply (indexedInjectF WellTypedValue__Boolean).
+  eapply WellTypedValue__boolean; eauto.
 Defined.

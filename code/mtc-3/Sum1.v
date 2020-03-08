@@ -23,8 +23,9 @@ Arguments inr1 {F G A}.
 
 Global Instance Functor__Sum1
        {F G} `{Functor F} `{Functor G}
-  : Functor (F + G)
-  :=
+  : Functor (F + G).
+Proof.
+  refine
     {|
       fmap :=
         fun A B f fga =>
@@ -33,6 +34,9 @@ Global Instance Functor__Sum1
           | inr1 ga => inr1 (fmap f ga)
           end;
     |}.
+  - move => A [] v; rewrite fmapId //.
+  - move => A B C f g [] /= v; rewrite fmapFusion //.
+Defined.
 
 Global Instance SubFunctor__Left
        F G H
@@ -59,11 +63,16 @@ Proof.
     move => ? [].
     {
       move => f fa EQ.
-      rewrite (project_success EQ) => //.
+      rewrite (projectSuccess EQ) => //.
     }
     {
       move => //.
     }
+  }
+  {
+    move => A B f fa.
+    rewrite {1}/fmap /=.
+    rewrite wellFormedSubFunctor //.
   }
 Defined.
 
@@ -95,8 +104,13 @@ Proof.
     }
     {
       move => g fa EQ.
-      rewrite (project_success EQ) => //.
+      rewrite (projectSuccess EQ) => //.
     }
+  }
+  {
+    move => A B f fa.
+    rewrite {1}/fmap /=.
+    rewrite wellFormedSubFunctor //.
   }
 Defined.
 

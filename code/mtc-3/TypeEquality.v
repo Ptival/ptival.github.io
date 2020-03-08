@@ -14,8 +14,8 @@ indicating whether that extensible type is equal to the extensible type being
 folded.
  *)
 Definition TypeEqualityResult
-           T
-  := Fix T -> bool.
+           T `{Functor T}
+  := Expression T -> bool.
 
 (** Tag for [TypeEquality]-related [ProgramAlgebra]s *)
 Variant ForTypeEquality := .
@@ -24,7 +24,7 @@ Variant ForTypeEquality := .
 The [typeEquality] operation is defined as the fold of its [ProgramAlgebra].
  *)
 Definition typeEquality
-           {T}
+           {T} `{Functor T}
            {typeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
   : Fix T -> TypeEqualityResult T
   := mendlerFold programAlgebra.
@@ -32,22 +32,26 @@ Definition typeEquality
 Definition TypeEqualityCorrectnessStatement
            {T} `{Functor T}
            {typeEquality__T : ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
-           (tau : Fix T)
+           (tau : Fix T) (UP'__tau : UP' tau)
   : Prop
   := forall tau',
     typeEquality tau tau' = true ->
-    tau = tau'.
+    tau = proj1_sig tau'.
 
 Variant ForTypeEqualityCorrectness := .
 
 Lemma typeEqualityCorrectness
       {T} `{Functor T}
-      {typeEquality__T :
+      {TypeEquality__T :
          ProgramAlgebra ForTypeEquality T (TypeEqualityResult T)}
-      `{PA : ! ProofAlgebra ForTypeEqualityCorrectness T
-               (sig TypeEqualityCorrectnessStatement)}
-  : forall tau, TypeEqualityCorrectnessStatement tau.
+      `{TypeEqualityCorrectness__T :
+          ! ProofAlgebra ForTypeEqualityCorrectness T
+            (sig (PropUP' TypeEqualityCorrectnessStatement))}
+      `{! WellFormedProofAlgebra TypeEqualityCorrectness__T}
+  : forall (tau : Expression T),
+    TypeEqualityCorrectnessStatement (proj1_sig tau) (proj2_sig tau).
 Proof.
-  move => tau.
-  apply (Induction tau).
+  move => [tau UP'__tau].
+  pose proof (Induction tau UP'__tau).
+  apply : (proj2_sig (Induction tau UP'__tau)).
 Qed.

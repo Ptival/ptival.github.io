@@ -4,6 +4,7 @@ From Coq Require Import
 
 From MTC Require Import
      Algebra
+     Functor
      IndexedAlgebra
      IndexedFunctor
      IndexedSubFunctor
@@ -20,18 +21,20 @@ correct well-typed relation is considered.
  *)
 Definition WellTypedValueProjectionStatement
            {T V}
+           `{Functor T} `{Functor V}
            (WellTypedValue__F : (TypedExpr T V)-indexedPropFunctor)
            (tau : Fix T)
            (WellTypedValue__V : (TypedExpr T V)-indexedPropFunctor)
            (tv : TypedExpr T V)
   : Prop
-  := type tv = tau ->
+  := proj1_sig (type tv) = tau ->
      WellTypedValue__F (IndexedFix WellTypedValue__V) tv.
 
 Variant ForWellTypedValueProjection := .
 
 Definition wellTypedValueProjection
            {T V}
+           `{Functor T} `{Functor V}
            (WellTypedValue__F : (TypedExpr T V)-indexedPropFunctor)
            (tau : Fix T)
            (WellTypedValue__V : (TypedExpr T V)-indexedPropFunctor)
@@ -59,14 +62,16 @@ Ltac wellTypedValueProjection__Other :=
   rewrite /WellTypedValueProjectionStatement /=;
   move => *;
   match goal with
-  | [ A : @eq (Fix ?T) ?tau _
-    , B : @eq (Fix ?T) ?tau _
-    |- _
+  | [ A : proj1_sig ?T = _
+    , B : proj1_sig ?tau = _
+      |- _
     ] => move : A B
   end;
   move ->;
-  move /(wrapF_inversion (inject _) (inject _));
-  move /(discriminate_inject _ _ _) => //.
+  match goal with
+  | [ |- ?l = ?r -> _ ] =>
+    move /(wrapF_inversion (unwrapUP' l) (unwrapUP' r)) => //
+  end.
 
 Hint Extern 5
      (IndexedProofAlgebra ForWellTypedValueProjection _ _)

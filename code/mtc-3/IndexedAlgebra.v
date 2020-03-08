@@ -1,7 +1,10 @@
 From MTC Require Import
      IndexedFunctor
+     IndexedSubFunctor
      IndexedSum1
 .
+
+Local Open Scope IndexedSubFunctor.
 
 Definition IndexedAlgebra
            {I} (F : I-indexedPropFunctor) (A : I-indexedProp)
@@ -42,6 +45,20 @@ Definition indexedUnwrapF
            {I} {F : I-indexedPropFunctor} `{IndexedFunctor I F}
   : forall (i : I), IndexedFix F i -> F (IndexedFix F) i
   := indexedFold (fun i => indexedFmap i indexedWrapF).
+
+(**
+NOTE: [F] is explicit because you'll need to specify it when backwards-proving
+to avoid the type class mechanism from picking [E] for it, since the conlusion
+does not mention [F].
+ *)
+Definition indexedInjectF
+           {I} {E : I-indexedPropFunctor}
+           (F : I-indexedPropFunctor)
+           `{IndexedFunctor I E} `{IndexedFunctor I F}
+           `{(E supports F)%IndexedSubFunctor} {i}
+           (fexp : F (IndexedFix E) i)
+  : IndexedFix E i
+  := indexedWrapF i (indexedInject fexp).
 
 Class IndexedProofAlgebra
       (Tag : Set) {I} (F : I-indexedPropFunctor) A :=
