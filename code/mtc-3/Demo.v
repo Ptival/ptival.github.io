@@ -21,6 +21,7 @@ From MTC Require Import
      TypeEquality
      TypeOf
      WellTypedValue
+     WellTypedValueProj1Type
      WellTypedValueProjection
 .
 
@@ -76,7 +77,8 @@ Definition inspectTypeOf
        match typeOf e with
        | None   => InspectIllTyped
        | Some tau =>
-         tau InspectType
+         (proj1_sig tau)
+           InspectType
            (fun _ rec =>
               (
                 (fun 'MkBooleanType => InspectBooleanType)
@@ -98,23 +100,23 @@ Variant InspectValue :=
 Definition inspectEval
   : Fix ExpressionLanguage -> InspectValue
   := fun e =>
-       eval e
-            InspectValue
-            (fun _ rec =>
-               (
-                 (fun e => match e with
-                        | MkBoolean b => InspectBoolean b
-                        | _           => InspectBadValue
-                        end)
-                 ||
-                 (fun e => match e with
-                        | MkNatural n => InspectNatural n
-                        | _           => InspectBadValue
-                        end)
-                 ||
-                 (fun '(MkStuck why) => InspectStuck why)
-               )%Sum1
-            ).
+       (proj1_sig (eval e))
+         InspectValue
+         (fun _ rec =>
+            (
+              (fun e => match e with
+                  | MkBoolean b => InspectBoolean b
+                  | _           => InspectBadValue
+                     end)
+              ||
+              (fun e => match e with
+                  | MkNatural n => InspectNatural n
+                  | _           => InspectBadValue
+                     end)
+              ||
+              (fun '(MkStuck why) => InspectStuck why)
+            )%Sum1
+         ).
 
 Definition someBooleanExpression
   : Fix ExpressionLanguage
@@ -122,15 +124,15 @@ Definition someBooleanExpression
 
 Definition someNaturalExpression
   : Fix ExpressionLanguage
-  := ifThenElse (boolean true)
-                (plus (natural 2) (natural 3))
-                (natural 4).
+  := ifThenElse (booleanExpression true)
+                (plusExpression (naturalExpression 2) (naturalExpression 3))
+                (naturalExpression 4).
 
 Definition someIllTypedExpression
   : Fix ExpressionLanguage
-  := ifThenElse (boolean true)
-                (plus (natural 2) (natural 3))
-                (boolean false).
+  := ifThenElse (booleanExpression true)
+                (plusExpression (naturalExpression 2) (naturalExpression 3))
+                (booleanExpression false).
 
 (**
 We can now inspect the result of running [typeOf]:
@@ -147,12 +149,38 @@ Compute inspectEval someNaturalExpression.
 (* Note that [eval] does not care about well-typedness: *)
 Compute inspectEval someIllTypedExpression.
 
+Hint Extern 0
+     (WellFormedProofAlgebra _)
+=> (constructor; move => [] //)
+  : typeclass_instances.
+
+(**
+For some reason, the type class mechanism fails at this...  I seem to get all
+sorts of trouble because of the [SubFunctorInversion__{Left, Right}] instances
+ *)
+Local Instance SoundnessAlgebra
+  : ProofAlgebra
+      ForSoundness
+      ExpressionLanguage
+      { x : Fix ExpressionLanguage | PropUP' (SoundnessStatement WellTypedValue) x }.
+Proof.
+apply ProofAlgebra__Sum1; try typeclasses eauto.
+simple eapply Soundness__Boolean; try typeclasses eauto.
+Defined.
+
+Local Instance WellFormedProofAlgebra__SoundnessAlgebra
+  : WellFormedProofAlgebra SoundnessAlgebra.
+Proof.
+typeclasses eauto.
+Defined.
+
 Theorem Soundness
-  : forall (tau : Fix TypeLanguage) (e : Fix ExpressionLanguage),
-    typeOf e = Some tau ->
-    IndexedFix WellTypedValue {| type := tau; expr := eval e; |}.
+  : forall (tau : Expression TypeLanguage) (e : Expression ExpressionLanguage),
+    typeOf (proj1_sig e) = Some tau ->
+    IndexedFix WellTypedValue {| type := tau; expr := eval (proj1_sig e); |}.
 Proof.
   move => tau e.
-  apply Soundness.
-  typeclasses eauto.
+  eapply Soundness.
+  - typeclasses eauto.
+  - exact (proj2_sig e).
 Qed.

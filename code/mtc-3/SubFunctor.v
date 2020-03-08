@@ -14,12 +14,21 @@ Class SubFunctor
       `{Functor F} `{Functor E}
   :=
     {
+
       inject  : forall {A : Set}, F A -> E A;
+
       project : forall {A : Set}, E A -> option (F A);
+
       project_inject : forall {A} {fa : F A},
           project (inject fa) = Some fa;
-      project_success : forall {A} {ea : E A} {fa : F A},
+
+      projectSuccess : forall {A} {ea : E A} {fa : F A},
           project ea = Some fa -> ea = inject fa;
+
+      wellFormedSubFunctor :
+        forall (A B : Set) (f : A -> B) (fa : F A),
+          fmap f (inject fa) = inject (fmap f fa);
+
     }.
 Arguments inject  {F E _ _ _ A}.
 Arguments project {F E _ _ _ A}.
@@ -40,4 +49,5 @@ Proof.
     |}.
   - move => //.
   - move => ??? [] //.
+  - move => //.
 Defined.
