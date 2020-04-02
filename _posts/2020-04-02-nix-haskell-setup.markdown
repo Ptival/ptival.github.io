@@ -185,7 +185,7 @@ executable present at run-time, and so you need to make these available, so that
 running `stack run my-executable` will be able to see those libraries and other
 executables.
 
-{% highlight yaml %}
+{% highlight nix %}
   stackShell =
     { ghcVersion
     , mkBuildInputs
@@ -230,7 +230,7 @@ My setups include three files:
 
 Here is an example `config.nix`:
 
-{% highlight yaml %}
+{% highlight nix %}
 { nur ? (import <nixpkgs> {}).nur.repos.ptival
 }:
 rec {
@@ -299,7 +299,7 @@ some bleeding-edge commit from some version control system.
 
 As for `shell.nix`:
 
-{% highlight yaml %}
+{% highlight nix %}
 { nur ? (import <nixpkgs> {}).nur.repos.ptival
 }:
 let
@@ -329,7 +329,7 @@ It has one field per GHC version, and for each version, it tweaks packages like
 
 Finally, `stack-shell.nix`:
 
-{% highlight yaml %}
+{% highlight nix %}
 { nur ? (import <nixpkgs> {}).nur.repos.ptival
 }:
 let
