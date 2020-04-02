@@ -1,4 +1,3 @@
-
 ---
 layout: post
 title: "Creating a card game in Haskell (part 6)"
