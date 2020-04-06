@@ -49,7 +49,7 @@ Nix library functions for building my shells
 The first step of the process consists in building the proper GHC with the
 proper dependencies installed, along with their Hoogle documentation.  Because
 this should be shared between my development shell and stack's shell, I isolate
-the process in a function `computeHaskellSetp`.  It currently takes three knobs
+the process in a function `computeHaskellSetup`.  It currently takes three knobs
 as input: `nixpkgsRev` specifies the nixpkgs commit to be used (so as to set in
 stone the environment unless I manually bump the revision), `nixpkgsArgs` are
 the arguments that will be passed to nixpkgs upon importing them (in practice,
@@ -96,12 +96,14 @@ from nixpkgs, remember that there might be overlays at play that will tweak what
 packages are present.
 
 `pkgDrv` is the derivation for the package we are trying to work on.  It uses
-another of my library functions, `callCabal2nixGitignore`, which works just like
-`callCabal2nix`, except that it will filter out files in your development
-directory that are not meant to be part of the source.  This will avoid the
-usual problem of having your `.stack-work`, your `dist-newstyle`, or even your
-Nix expressions end up in the derivation, making it both larger than it needs
-be, and triggering spurious environment rebuilds when these files change.
+another of my library functions, `callCabal2nixGitignore` (implementation
+[here](https://github.com/Ptival/nur-packages/blob/409d3c420e9eed67ccb006293fb0a884d8c7f5d6/lib/default.nix#L5-L10)),
+which works just like `callCabal2nix`, except that it will filter out files in
+your development directory that are not meant to be part of the source.  This
+will avoid the usual problem of having your `.stack-work`, your `dist-newstyle`,
+or even your Nix expressions end up in the derivation, making it both larger
+than it needs be, and triggering spurious environment rebuilds when these files
+change.
 
 Then we grab the dependencies of this package, `pkgDeps`, and create a `ghc` set
 up with Hoogle documentation for those packages.  This function simply returns a
@@ -256,8 +258,8 @@ rec {
                 monad-dijkstra = dontCheck superH.monad-dijkstra;
 
                 # Here is how you get an arbitrary commit of an arbitrary Haskell package from source.
-                # Since it comes from GitHub, no need to call `cabal2nixGitignore` since the source comes
-                # from a fresh checkout
+                # Since it comes from GitHub, no need for `callCabal2nixGitignore` as the source comes
+                # from a fresh checkout, `callCabal2nix` suffices.
                 polysemy =
                   (selfH.callCabal2nix
                     "polysemy"
