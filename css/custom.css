@@ -3,4 +3,11 @@
   src: url("../assets/fonts/tintin.ttf");
 }
 
+@font-face {
+  font-family: 'Iosevka';
+  src: url("../assets/fonts/iosevka-fixed-ss09-regular.ttf");
+}
+
 a.site-title { font-family: 'Tintin'; }
+
+code { font-family: 'Iosevka'; }
