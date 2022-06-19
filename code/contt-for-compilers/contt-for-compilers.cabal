@@ -1,0 +1,18 @@
+cabal-version:      2.4
+name:               contt-for-compilers
+version:            0.1.0.0
+author:             Valentin Robert
+maintainer:         valentin.robert.42@gmail.com
+
+library
+    build-depends:
+        base,
+        lens,
+        mtl,
+        prettyprinter,
+        transformers,
+    exposed-modules:
+        ANF
+        Source
+        Var
+    hs-source-dirs:   src
