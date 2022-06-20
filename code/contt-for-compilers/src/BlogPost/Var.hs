@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Var where
+module BlogPost.Var where
 
 import Data.String (IsString)
 import Prettyprinter (Pretty (pretty))
@@ -10,7 +10,7 @@ newtype Bdr = B {getBdr :: String} deriving (IsString, Show)
 instance Pretty Bdr where
   pretty = pretty . getBdr
 
-newtype Var = V {getVar :: String} deriving (IsString, Show)
+newtype Var = V {getVar :: String} deriving (Eq, IsString, Ord, Show)
 
 instance Pretty Var where
   pretty = pretty . getVar

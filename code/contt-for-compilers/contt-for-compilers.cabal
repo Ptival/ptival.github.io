@@ -7,12 +7,14 @@ maintainer:         valentin.robert.42@gmail.com
 library
     build-depends:
         base,
+        containers,
         lens,
         mtl,
         prettyprinter,
         transformers,
-    exposed-modules:
-        ANF
-        Source
-        Var
+    other-modules:
+        BlogPost.ANF
+        BlogPost.CCLL
+        BlogPost.Source
+        BlogPost.Var
     hs-source-dirs:   src
