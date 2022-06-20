@@ -7,7 +7,7 @@ module BlogPost.CCLL where
 
 import qualified BlogPost.ANF as A
 import qualified BlogPost.Source as S
-import BlogPost.Var (Bdr (B), Var (V), varOfBdr)
+import BlogPost.Var (Bdr (B), Var (V), bdrOfVar, varOfBdr)
 import Control.Lens (Field1 (..), Identity, makeLenses, over, view, (<<+=))
 import Control.Monad ((<=<))
 import Control.Monad.RWS (MonadState (get), MonadWriter (tell), RWST (RWST, runRWST))
@@ -17,26 +17,35 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Cont (ContT (runContT), callCC, evalContT, mapContT, withContT)
 import Control.Monad.Writer (WriterT (WriterT, runWriterT), runWriter)
 import Data.Functor.Identity (Identity (Identity, runIdentity))
-import Data.Set (Set)
+import Data.Set (Set, (\\))
 import qualified Data.Set as Set
+import Data.String (IsString (fromString))
 import Foreign (free)
-import Prettyprinter (Pretty (pretty), encloseSep, hsep, sep, (<+>))
+import Prettyprinter (Pretty (pretty), encloseSep, hcat, hsep, sep, (<+>))
 import Text.ParserCombinators.ReadP (sepBy)
 
 data Atom
   = App A.Const A.Const
   | Const A.Const
   | Pack [Var]
+  | Unpack Var Int
   deriving (Show)
+
+instance IsString Atom where
+  fromString = Const . fromString
 
 instance Pretty Atom where
   pretty (App v1 v2) = S.prettyApp (pretty v1) (pretty v2)
   pretty (Const c) = pretty c
   pretty (Pack cs) = encloseSep "<" ">" ", " (pretty <$> cs)
+  pretty (Unpack v i) = hcat [pretty v, ".", pretty i]
 
 data Fun
   = Atom Atom
   | Lam Bdr (Exp Fun)
+
+instance IsString Fun where
+  fromString = Atom . fromString
 
 instance Pretty Fun where
   pretty (Atom a) = pretty a
@@ -55,6 +64,9 @@ data Exp f
   = Halt f
   | Let Bdr (Exp f) (Exp f)
   deriving (Show)
+
+instance IsString f => IsString (Exp f) where
+  fromString = Halt . fromString
 
 instance Pretty f => Pretty (Exp f) where
   pretty (Halt a) = pretty a
@@ -119,11 +131,16 @@ ccllAtom (A.App e1 e2) = return $ App e1 e2
 ccllAtom (A.Const c) = return $ Const c
 ccllAtom (A.Lam p e) = do
   (b, v) <- lift fresh
-  e' <- lift $ ccllExp e
-  let fvs = freeVars e
+  let fvs = Set.toList (freeVars e \\ Set.singleton (varOfBdr p))
+  e' <- lift $ unpacks fvs <$> ccllExp e
   lift $ tell $ CCLLWriter [Lambda b ["env", p] e']
-  mapContT (fmap (Let "env" (Halt $ Pack (Set.toList fvs)))) $
+  mapContT (fmap (Let "env" (Halt $ Pack fvs))) $
     return (App (A.Var v) (A.Var "env"))
+  where
+    unpacks :: [Var] -> Exp Atom -> Exp Atom
+    unpacks vs = flip (foldr unpack) (zip [0 ..] vs)
+    unpack :: (Int, Var) -> Exp Atom -> Exp Atom
+    unpack (i, v) e = Let (bdrOfVar v) (Halt (Unpack "env" i)) e
 
 ccllExp :: A.Exp -> CCLLM (Exp Atom)
 ccllExp (A.Halt a) = evalContT $ Halt <$> ccllAtom a
@@ -170,9 +187,12 @@ flip minus 1 5
 
 {- >>> pretty (ccll (A.anf e1))
 let ccll#2 = \ env b ->
+             let a = env.0 in
+             let f = env.1 in
              let anf#0 = f b in
              anf#0 a in
 let ccll#1 = \ env a ->
+             let f = env.0 in
              let env = <a, b, f> in
              ccll#2 env in
 let ccll#0 = \ env f ->

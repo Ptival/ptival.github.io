@@ -16,6 +16,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Cont (ContT (runContT))
 import Control.Monad.Writer (WriterT (WriterT, runWriterT), runWriter)
 import Data.Functor.Identity (Identity (Identity, runIdentity))
+import Data.String (IsString (fromString))
 import Prettyprinter (Pretty (pretty), hsep)
 
 data Const
@@ -23,15 +24,21 @@ data Const
   | Var Var
   deriving (Show)
 
+instance IsString Const where
+  fromString = Var . fromString
+
+instance Pretty Const where
+  pretty (Int n) = pretty n
+  pretty (Var v) = pretty v
+
 data Atom
   = App Const Const
   | Const Const
   | Lam Bdr Exp
   deriving (Show)
 
-instance Pretty Const where
-  pretty (Int n) = pretty n
-  pretty (Var v) = pretty v
+instance IsString Atom where
+  fromString = Const . fromString
 
 gatherLamsAtom :: Atom -> ([Bdr], Exp)
 gatherLamsAtom (Lam b a) = over _1 (b :) (gatherLamsExp a)
@@ -52,6 +59,9 @@ data Exp
   = Halt Atom
   | Let Bdr Exp Exp
   deriving (Show)
+
+instance IsString Exp where
+  fromString = Halt . fromString
 
 instance Pretty Exp where
   pretty (Halt a) = pretty a
