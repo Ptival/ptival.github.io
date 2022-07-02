@@ -149,14 +149,14 @@ e1 =
 {- >>> pretty e1
 let a = 2 in
 let b = 3 in
-plus a b
+((plus a) b)
 -}
 
 {- >>> pretty $ anf e1
 let a = 2 in
 let b = 3 in
-let anf#0 = plus a in
-anf#0 b
+let anf#0 = (plus a) in
+(anf#0 b)
 -}
 
 e2 :: S.Exp
@@ -171,18 +171,18 @@ e2 =
 let a = 5 in
 let sum = let a = 2 in
           let b = 3 in
-          plus a b in
-plus a sum
+          ((plus a) b) in
+((plus a) sum)
 -}
 
 {- >>> pretty $ anf e2
 let a = 5 in
 let sum = let a = 2 in
           let b = 3 in
-          let anf#0 = plus a in
-          anf#0 b in
-let anf#1 = plus a in
-anf#1 sum
+          let anf#0 = (plus a) in
+          (anf#0 b) in
+let anf#1 = (plus a) in
+(anf#1 sum)
 -}
 
 e3 :: S.Exp
@@ -193,15 +193,15 @@ e3 =
 
 {- >>> pretty e3
 let flip = \ f a b ->
-           f b a in
-flip minus 1 5
+           ((f b) a) in
+(((flip minus) 1) 5)
 -}
 
 {- >>> pretty $ anf e3
 let flip = \ f a b ->
-           let anf#0 = f b in
-           anf#0 a in
-let anf#2 = flip minus in
-let anf#1 = anf#2 1 in
-anf#1 5
+           let anf#0 = (f b) in
+           (anf#0 a) in
+let anf#2 = (flip minus) in
+let anf#1 = (anf#2 1) in
+(anf#1 5)
 -}

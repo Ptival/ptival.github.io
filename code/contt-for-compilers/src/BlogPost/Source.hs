@@ -5,7 +5,7 @@ module BlogPost.Source where
 import BlogPost.Var (Bdr, Var)
 import Control.Lens (Field1 (_1), over)
 import Data.String (IsString (fromString))
-import Prettyprinter (Doc, Pretty (pretty), hang, hsep, vcat)
+import Prettyprinter (Doc, Pretty (pretty), hang, hcat, hsep, vcat)
 
 data Exp
   = App Exp Exp
@@ -19,7 +19,7 @@ instance IsString Exp where
   fromString = Var . fromString
 
 prettyApp :: Doc d -> Doc d -> Doc d
-prettyApp e1 e2 = hsep [e1, e2]
+prettyApp e1 e2 = hcat ["(", hsep [e1, e2], ")"]
 
 prettyLam :: Doc d -> Doc d -> Doc d
 prettyLam b e =
