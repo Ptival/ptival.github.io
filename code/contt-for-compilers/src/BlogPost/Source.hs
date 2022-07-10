@@ -2,6 +2,7 @@
 
 module BlogPost.Source where
 
+import BlogPost.Renaming (Renamable (rename), Renaming, removeBdr, renameVar)
 import BlogPost.Var (Bdr, Var)
 import Control.Lens (Field1 (_1), over)
 import Data.String (IsString (fromString))
@@ -17,6 +18,14 @@ data Exp
 
 instance IsString Exp where
   fromString = Var . fromString
+
+instance Renamable Exp where
+  rename r (App e1 e2) = App (rename r e1) (rename r e2)
+  rename r (Int i) = Int i
+  rename r (Lam b e) = rename (removeBdr b r) e
+  rename r (Let b e1 e2) =
+    Let b (rename r e1) (rename (removeBdr b r) e2)
+  rename r (Var v) = Var (rename r v)
 
 prettyApp :: Doc d -> Doc d -> Doc d
 prettyApp e1 e2 = hcat ["(", hsep [e1, e2], ")"]

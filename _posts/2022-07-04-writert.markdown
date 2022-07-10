@@ -1,0 +1,346 @@
+---
+layout: post
+title: "WriterT: aggregating data upwards silently"
+date: 2022-07-04 12:00:00 +0100
+permalink: writert
+comments: true
+categories:
+---
+
+During some work on a compiler recently, we ran into use cases where `WriterT`
+and `ContT` were quite handy to achieve some fairly non-local code
+transformations that would be somewhat awkward to do in a more direct style.
+
+These will not be surprising if you're used to reaching for these abstractions,
+but I think it could be enlightening to beginners or even more advanced users
+who are not used to noticing the situations wherein these abstractions shine.
+
+This post will focus on the "outer" `WriterT` layer, and a follow-up post will
+focus on `ContT`.
+
+A brief, incomplete primer on administrative normal form
+--------------------------------------------------------
+
+One type of transformation that is often useful when compiling a high-level
+language down to something closer to machine instructions is to break complex
+computations into sequences of atomic computations.  What you define as atomic
+is somewhat up to you, so let me make the case for a small language that would
+benefit from such a transformation.
+
+```haskell
+data Exp
+  = App Exp Exp
+  | Int Int
+  | Lam Bdr Exp
+  | Let Bdr Exp Exp
+  | Var Var
+```
+
+This language accepts arbitrarily nested function applications, so you could
+have one expression be:
+
+```haskell
+-- syntactically:
+(v1 (v2 (v3 v4))) (v5 v6)
+-- or as Exp:
+App (App (App v1) (App v2 (App v3 v4))) (App v5 v6)
+```
+
+Those are a lot of function calls!  In "administrative normal form" (often
+shortened "ANF"), we would like to give a name to every temporary
+sub-expression, and to have them properly ordered for the rest of the compiler.
+One such output for the expression above would be:
+
+```haskell
+-- syntactically:
+let a = v3 v4 in
+let b = v2 a in
+let c = v1 b in
+let d = v5 v6 in
+c d
+-- or as Exp:
+Let "a" (App v3 v4)
+  (Let "b" (App v2 "a")
+    (Let "c" (App v1 "b")
+      (Let "d" (App v5 v6)
+        (App "c" "d")
+      )
+    )
+  )
+```
+
+Note that there is some flexibility in the output: the computation producing `d`
+is independent from the computations producing `c`, so it could have been first,
+or interleaved anywhere, unless our language allows side-effects, in which case
+we'd likely want to produce exactly this output, assuming some left-to-right
+evaluation convention.
+
+Implementing ANF
+----------------
+
+While the `Exp` datatype is capable of representing the output of our ANF phase,
+its type does not represent tightly the effect of the transformation: ideally
+there are certain values that we'd like to no longer exist after this pass, such
+as our initial very-nested application.
+
+Instead, it can be nice to create a different data type, whose structure
+enforces our intent more precisely:
+
+```haskell
+data Const
+  = Int Int
+  | Var Var
+
+-- Note: in the attached code, each language lives in its own module, so ANF.Exp
+-- does not conflict with Source.Exp
+data Exp
+  = App Const Const
+  | Const Const
+  | Lam Bdr Exp
+  | Let Bdr Exp Exp
+```
+
+For this language, we splits the original `Source.Exp` into two, carving out
+the constant expressions.  Only those are now allowed inside of a function
+application: this guarantees the absence of nested applications, as they cannot
+be represented in this language!
+
+Let's now try to implement the ANF pass, in the most optimistic, naive way one
+could think of.  Because we will need to generate fresh variables, let's assume
+that we have a `Monad` called `ANFM` that we will power up as we need.  For now,
+let's assume that it has a `State` layer with some way of generating fresh
+variables.
+
+```haskell
+-- Note: Could also just be `State`
+newtype ANFM a = ANFM { unANFM :: StateT Int Identity a }
+  deriving
+    ( Applicative, Functor, Monad
+    , MonadState Int
+    )
+
+-- S is an alias for the original "source" language, for brevity
+anf :: S.Exp -> ANFM ANF.Exp
+anf (S.App e1 e2)   = _
+anf (S.Int i)       = return $ ANF.Const (ANF.Int i)
+anf (S.Lam b e)     = ANF.Lam b <$> anf e
+anf (S.Let b e1 e2) = ANF.Let b <$> anf e1 <*> anf e2
+anf (S.Var v)       = return $ ANF.Const (ANF.Var v)
+```
+
+For most cases, it's a simple matter of translation and recursion.  But what
+should happend for `S.App e1 e2`?  Well, we better produce some `App a b`
+somewhere in our output, but if those expressions are complex, we also expect a
+bunch of let-bindings to be needed.
+
+If we inductively assume that calling `anf e1` works correctly, it ought to
+return some `ANF.Exp` in correct form, likewise for `anf e2`.  But we've gotta
+get some constants to put in the `App` node we produce.  Ignoring for now the
+freshness of binders we introduce for it, we could be doing:
+
+```haskell
+anf (S.App e1 e2) = do
+  (b1, v1) <- fresh   -- assume fresh has type @ANFM (Bdr, Var)@
+  (b2, v2) <- fresh
+  e1' <- anf e1
+  e2' <- anf e2
+  return $ ANF.Let b1 e1' (ANF.Let b2 e2' (ANF.App v1 v2))
+```
+
+which... works!  But let's see how it works on some input:
+
+```haskell
+-- Input:
+let a = 2 in
+let b = 3 in
+plus a b
+-- Output:
+let a = 2 in
+let b = 3 in
+let anf#0 = let anf#2 = plus in
+            let anf#3 = a in
+            a1 a2 in
+let anf#1 = b in
+a1 a2
+```
+
+It's alright, but, it's a bit sad that we generate bindings that stand for
+existing variables or numeric constants.  Ideally, we'd like `anf` to tell us
+what constant to use for a given expression, but we also need it to let us know
+if there are bindings to be introduced as part of the transformation.
+Additionally, where expressions are allowed in the final syntax tree, we don't
+want to be producing extra redundant bindings.
+
+So we may come up with the following scheme:
+
+```haskell
+anfConst :: S.Exp -> ANFM ([(Bdr, ANF.Exp)], ANF.Const)
+anfConst (S.Int i) = return ([], ANF.Int i)
+anfConst (S.Var v) = return ([], ANF.Var v)
+anfConst e = do
+  (b, v) <- fresh
+  e' <- anfExp e
+  return ([(b, e')], ANF.Var v)
+
+-- This just creates a series of nested @Let@s
+bindAll :: [(Bdr, ANF.Exp)] -> ANF.Exp -> ANF.Exp
+bindAll = flip (foldr (uncurry ANF.Let))
+
+anfExp :: S.Exp -> ANFM ANF.Exp
+anfExp (S.App e1 e2) =
+  (lets1, c1) <- anfConst e1 in
+  (lets2, c2) <- anfConst e2 in
+  return $ bindAll lets1 (bindAll lets2 (ANF.App c1 c2))
+anfExp (S.Int i)       = return $ ANF.Const (ANF.Int i)
+anfExp (S.Lam b e)     = ANF.Lam b <$> anfExp e
+anfExp (S.Let b e1 e2) = Let b <$> anfExp e1 <*> anfExp e2
+anfExp (S.Var v)       = return $ ANF.Const (Var v)
+```
+
+That is, we have two functions that we call appropriately, based on whether we
+need a constant or just an ANF-ed expression, and the function that produces
+constants may also indicate that some let bindings need to bubble up, so to
+speak, and be created at some appropriate location.
+
+While this works, if we had a much larger syntax, there would be a lot of places
+where all we'd be doing is perform recursive calls, aggregate lists of lets, and
+pass those back to our caller.  Its this kind of setup that should make you
+think about using a `Writer` effect.  To reiterate:
+
+- We're writing out data for someone in our calling context.
+
+- When multiple places are producing data, there is a clear way to aggregate the
+different bits of data for our caller.  In our example, they are just lists that
+we append, but the general case can involve other types of aggregation.
+
+Let's use `WriterT` to disentangle our two concerns!  The idea is that anywhere
+in the ANF computation, we can "emit" some let-bindings that are to be created
+by whomever in our calling context is responsible for capturing them.  We add a
+`Writer` layer to our `ANFM` monad, with some list type to represent those
+binders we accumulate.
+
+```haskell
+type LetBinding = (Bdr, Exp)
+
+-- Updated definition!
+newtype ANFM a = ANFM { unANFM :: WriterT [LetBinding] (StateT Int Identity) a }
+  deriving
+    ( Applicative, Functor, Monad
+    , MonadState Int
+    , MonadWriter [LetBinding]
+    )
+```
+
+Here's what becomes of `anfConst` and `anfExp` in this new setting:
+
+```haskell
+anfConst :: S.Exp -> ANFM ANF.Const
+anfConst (S.Int i) = return (ANF.Int i)
+anfConst (S.Var v) = return (ANF.Var v)
+anfConst e = do
+  (b, v) <- fresh
+  e' <- anfExp e
+  tell [(b, e')]
+  return (ANF.Var v)
+
+anfExp :: S.Exp -> ANFM ANF.Exp
+anfExp (S.App e1 e2) = ANF.App <$> anfConst e1 <*> andConst e2
+anfExp (S.Int i) = return $ ANF.Const (ANF.Int i)
+anfExp (S.Lam b e) = do
+  (e', bs) <- intercept (anfExp e)
+  return $ Lam b (bindAll bs e')
+anfExp (S.Let b e1 e2) = do
+  e2' <- anfExp e2
+  (e2', bs) <- intercept (anfExp e1)
+  return $ ANF.Let b e1' (bindAll bs e2')
+anfExp (S.Var v) = return $ ANF.Const (ANF.Var v)
+
+anf :: S.Exp -> ANF.Exp
+anf e =
+  let (e', bs) =
+        runIdentity
+          . flip evalStateT (ANFState 0)
+          . runWriterT
+          . unANFM
+          $ anfExp e
+   in bindAll bs e'
+```
+
+The difference in `anfConst` is that we emit the intent of having the binder `b`
+be bound to `e'`.  We are not realizing this binding, just telling our caller
+that, where appropriate, this binding should be created.
+
+There are two places where it is necessary to intercept let-bindings before they
+bubble too far up the expression.  Simply, bindings should not bubble up past
+other bindings, since they might be depending on those.  There are subtleties
+with recursive bindings that we skip here, and we choose the easy, conservative
+approach of intercepting bindings before they cross **any** binding site,
+regardless of whether they depend on it.  This happens when bindings would
+potentially bubble out of a lambda's body, or when they would bubble from the
+body of a let expression to its outer expression.
+
+We will need to use an operation that is not part of the `MonadWriter` type
+class, but is very useful here.  It's a bit like
+[`listen`](https://hackage.haskell.org/package/transformers-0.6.0.4/docs/Control-Monad-Trans-Writer-Lazy.html#v:listen),
+except it hides the local writer output from its surrounding context.  I'm not
+sure why this doesn't exist, so let me know if it's a bad idea!  (Does it break
+some wanted law?)
+
+```haskell
+-- As it would be implemented for `WriterT`.
+intercept :: (Monad m, Monoid w) => WriterT w m a -> WriterT w m (a, w)
+intercept ma = WriterT $ do
+  (a, w) <- runWriterT ma
+  pure ((a, w), mempty)
+```
+
+I don't think it's quite possible to implement it for `MonadWriter` without
+support in the class itself.
+
+```haskell
+-- As we implement it here for `ANFM`.
+intercept :: ANFM a -> ANFM (a, [LetBinding])
+intercept ma = ANFM $ WriterT $ do
+  (a, bs) <- runWriterT (unANFM ma)
+  pure ((a, bs), mempty)
+```
+
+And that's it!  We abstracted away the tedium of propagation and aggregation of
+`LetBinding`s.  The places that want them created just have to call `tell`, the
+places that need to "intercept" them just do so and create them.  Finally, our
+top-level `anf` function listens to and bind those `LetBinding`s that have
+bubbled their way to the very top without interception.
+
+A last, harder example, for our conclusion, this input:
+
+```haskell
+let main = \ arg ->
+           let sum = \ n ->
+                     let f = \ x ->
+                             + n x in
+                     cond (eq n 1) 1 (f (sum (minus n 1))) in
+           sum arg in
+main 42
+```
+
+becomes:
+
+```haskell
+let main = \ arg ->
+           let sum = \ n ->
+                     let f = \ x ->
+                             let anf#0 = + n in
+                             anf#0 x in
+                     let anf#4 = eq n in
+                     let anf#3 = anf#4 1 in
+                     let anf#2 = cond anf#3 in
+                     let anf#1 = anf#2 1 in
+                     let anf#8 = minus n in
+                     let anf#7 = anf#8 1 in
+                     let anf#6 = sum anf#7 in
+                     let anf#5 = f anf#6 in
+                     anf#1 anf#5 in
+           sum arg in
+main 42
+
+```

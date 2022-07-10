@@ -2,10 +2,11 @@
 
 module BlogPost.Var where
 
+import Data.Maybe (fromMaybe)
 import Data.String (IsString)
 import Prettyprinter (Pretty (pretty))
 
-newtype Bdr = B {getBdr :: String} deriving (IsString, Show)
+newtype Bdr = B {getBdr :: String} deriving (Eq, IsString, Ord, Show)
 
 instance Pretty Bdr where
   pretty = pretty . getBdr

@@ -80,221 +80,221 @@ data Lambda = Lambda
 
 makeLenses ''Lambda
 
-newtype CCLLWriter = CCLLWriter {_lambdas :: [Lambda]}
-  deriving (Monoid, Semigroup)
+-- newtype CCLLWriter = CCLLWriter {_lambdas :: [Lambda]}
+--   deriving (Monoid, Semigroup)
 
-newtype CCLLState = CCLLState {_freshCounter :: Int}
+-- newtype CCLLState = CCLLState {_freshCounter :: Int}
 
-makeLenses ''CCLLState
+-- makeLenses ''CCLLState
 
-newtype CCLLM a = CCLLM
-  { getCCLLM :: WriterT CCLLWriter (StateT CCLLState Identity) a
-  }
-  deriving
-    ( Applicative,
-      Functor,
-      Monad,
-      MonadWriter CCLLWriter,
-      MonadState CCLLState
-    )
+-- newtype CCLLM a = CCLLM
+--   { getCCLLM :: WriterT CCLLWriter (StateT CCLLState Identity) a
+--   }
+--   deriving
+--     ( Applicative,
+--       Functor,
+--       Monad,
+--       MonadWriter CCLLWriter,
+--       MonadState CCLLState
+--     )
 
-fresh :: CCLLM (Bdr, Var)
-fresh = do
-  sId <- freshCounter <<+= 1
-  let s = "ccll#" <> show sId
-  return (B s, V s)
+-- fresh :: CCLLM (Bdr, Var)
+-- fresh = do
+--   sId <- freshCounter <<+= 1
+--   let s = "ccll#" <> show sId
+--   return (B s, V s)
 
-class FreeVars a where
-  freeVars :: a -> Set Var
+-- class FreeVars a where
+--   freeVars :: a -> Set Var
 
-instance FreeVars Var where
-  freeVars = Set.singleton
+-- instance FreeVars Var where
+--   freeVars = Set.singleton
 
-instance FreeVars A.Const where
-  freeVars (A.Var v) = freeVars v
-  freeVars (A.Int _) = Set.empty
+-- instance FreeVars A.Const where
+--   freeVars (A.Var v) = freeVars v
+--   freeVars (A.Int _) = Set.empty
 
-instance FreeVars A.Atom where
-  freeVars (A.App e1 e2) = freeVars e1 `Set.union` freeVars e2
-  freeVars (A.Const c) = freeVars c
-  freeVars (A.Lam b e) = freeVars e `Set.difference` Set.singleton (varOfBdr b)
+-- instance FreeVars A.Atom where
+--   freeVars (A.App e1 e2) = freeVars e1 `Set.union` freeVars e2
+--   freeVars (A.Const c) = freeVars c
+--   freeVars (A.Lam b e) = freeVars e `Set.difference` Set.singleton (varOfBdr b)
 
-instance FreeVars A.Exp where
-  freeVars (A.Halt a) = freeVars a
-  -- Here we're going to consider lets as non-recursive by default
-  freeVars (A.Let b e1 e2) =
-    freeVars e1
-      `Set.union` (freeVars e2 `Set.difference` Set.singleton (varOfBdr b))
+-- instance FreeVars A.Exp where
+--   freeVars (A.Halt a) = freeVars a
+--   -- Here we're going to consider lets as non-recursive by default
+--   freeVars (A.Let b e1 e2) =
+--     freeVars e1
+--       `Set.union` (freeVars e2 `Set.difference` Set.singleton (varOfBdr b))
 
-envBdr :: Bdr
-envBdr = "env"
+-- envBdr :: Bdr
+-- envBdr = "env"
 
-envVar :: Var
-envVar = "env"
+-- envVar :: Var
+-- envVar = "env"
 
-ccllAtom :: A.Atom -> ContT (Exp Atom) CCLLM Atom
-ccllAtom (A.App e1 e2) = return $ App e1 e2
-ccllAtom (A.Const c) = return $ Const c
-ccllAtom (A.Lam p e) = do
-  (b, v) <- lift fresh
-  let fvs = Set.toList (freeVars e \\ Set.singleton (varOfBdr p))
-  e' <- lift $ unpacks fvs <$> ccllExp e
-  lift $ tell $ CCLLWriter [Lambda b [envBdr, p] e']
-  mapContT (fmap (Let envBdr (Halt $ Pack fvs))) $
-    return (App (A.Var v) (A.Var envVar))
-  where
-    unpacks :: [Var] -> Exp Atom -> Exp Atom
-    unpacks vs = flip (foldr unpack) (zip [0 ..] vs)
-    unpack :: (Int, Var) -> Exp Atom -> Exp Atom
-    unpack (i, v) e = Let (bdrOfVar v) (Halt (Unpack envVar i)) e
+-- ccllAtom :: A.Atom -> ContT (Exp Atom) CCLLM Atom
+-- ccllAtom (A.App e1 e2) = return $ App e1 e2
+-- ccllAtom (A.Const c) = return $ Const c
+-- ccllAtom (A.Lam p e) = do
+--   (b, v) <- lift fresh
+--   let fvs = Set.toList (freeVars e \\ Set.singleton (varOfBdr p))
+--   e' <- lift $ unpacks fvs <$> ccllExp e
+--   lift $ tell $ CCLLWriter [Lambda b [envBdr, p] e']
+--   mapContT (fmap (Let envBdr (Halt $ Pack fvs))) $
+--     return (App (A.Var v) (A.Var envVar))
+--   where
+--     unpacks :: [Var] -> Exp Atom -> Exp Atom
+--     unpacks vs = flip (foldr unpack) (zip [0 ..] vs)
+--     unpack :: (Int, Var) -> Exp Atom -> Exp Atom
+--     unpack (i, v) e = Let (bdrOfVar v) (Halt (Unpack envVar i)) e
 
-ccllExp :: A.Exp -> CCLLM (Exp Atom)
-ccllExp (A.Halt a) = evalContT $ Halt <$> ccllAtom a
-ccllExp (A.Let b e1 e2) = Let b <$> ccllExp e1 <*> ccllExp e2
+-- ccllExp :: A.Exp -> CCLLM (Exp Atom)
+-- ccllExp (A.Halt a) = evalContT $ Halt <$> ccllAtom a
+-- ccllExp (A.Let b e1 e2) = Let b <$> ccllExp e1 <*> ccllExp e2
 
-nestLambdas :: [Bdr] -> Exp Fun -> Exp Fun
-nestLambdas = flip $ foldr lam
-  where
-    lam :: Bdr -> Exp Fun -> Exp Fun
-    lam b e = Halt (Lam b e)
+-- nestLambdas :: [Bdr] -> Exp Fun -> Exp Fun
+-- nestLambdas = flip $ foldr lam
+--   where
+--     lam :: Bdr -> Exp Fun -> Exp Fun
+--     lam b e = Halt (Lam b e)
 
-liftedLambda :: Lambda -> Exp Fun -> Exp Fun
-liftedLambda l =
-  Let
-    (view name l)
-    (nestLambdas (view params l) (asExpFun (view body l)))
+-- liftedLambda :: Lambda -> Exp Fun -> Exp Fun
+-- liftedLambda l =
+--   Let
+--     (view name l)
+--     (nestLambdas (view params l) (asExpFun (view body l)))
 
-asExpFun :: Exp Atom -> Exp Fun
-asExpFun (Halt a) = Halt (Atom a)
-asExpFun (Let b e1 e2) = Let b (asExpFun e1) (asExpFun e2)
+-- asExpFun :: Exp Atom -> Exp Fun
+-- asExpFun (Halt a) = Halt (Atom a)
+-- asExpFun (Let b e1 e2) = Let b (asExpFun e1) (asExpFun e2)
 
-ccll :: A.Exp -> Exp Fun
-ccll e =
-  let (e', CCLLWriter ls) =
-        runIdentity
-          . flip evalStateT (CCLLState 0)
-          . runWriterT
-          . getCCLLM
-          $ ccllExp e
-   in foldr liftedLambda (asExpFun e') ls
+-- ccll :: A.Exp -> Exp Fun
+-- ccll e =
+--   let (e', CCLLWriter ls) =
+--         runIdentity
+--           . flip evalStateT (CCLLState 0)
+--           . runWriterT
+--           . getCCLLM
+--           $ ccllExp e
+--    in foldr liftedLambda (asExpFun e') ls
 
-e1 :: S.Exp
-e1 =
-  S.Let
-    "flip"
-    (S.lams ["f", "a", "b"] (S.apps ["f", "b", "a"]))
-    (S.apps ["flip", "minus", S.Int 1, S.Int 5])
+-- e1 :: S.Exp
+-- e1 =
+--   S.Let
+--     "flip"
+--     (S.lams ["f", "a", "b"] (S.apps ["f", "b", "a"]))
+--     (S.apps ["flip", "minus", S.Int 1, S.Int 5])
 
-{- >>> pretty e1
-let flip = \ f a b ->
-           f b a in
-flip minus 1 5
--}
+-- {- >>> pretty e1
+-- let flip = \ f a b ->
+--            f b a in
+-- flip minus 1 5
+-- -}
 
-{- >>> pretty (ccll (A.anf e1))
-let ccll#2 = \ env b ->
-             let a = env.0 in
-             let f = env.1 in
-             let anf#0 = f b in
-             anf#0 a in
-let ccll#1 = \ env a ->
-             let f = env.0 in
-             let env = <a, f> in
-             ccll#2 env in
-let ccll#0 = \ env f ->
-             let env = <f> in
-             ccll#1 env in
-let flip = let env = <> in
-           ccll#0 env in
-let anf#2 = flip minus in
-let anf#1 = anf#2 1 in
-anf#1 5
--}
+-- {- >>> pretty (ccll (A.anf e1))
+-- let ccll#2 = \ env b ->
+--              let a = env.0 in
+--              let f = env.1 in
+--              let anf#0 = f b in
+--              anf#0 a in
+-- let ccll#1 = \ env a ->
+--              let f = env.0 in
+--              let env = <a, f> in
+--              ccll#2 env in
+-- let ccll#0 = \ env f ->
+--              let env = <f> in
+--              ccll#1 env in
+-- let flip = let env = <> in
+--            ccll#0 env in
+-- let anf#2 = flip minus in
+-- let anf#1 = anf#2 1 in
+-- anf#1 5
+-- -}
 
-e2 :: S.Exp
-e2 =
-  S.Let "main"
-    (S.lams ["arg"]
-      (S.Let "sum"
-        (S.lams ["n"]
-          (S.Let "f"
-            (S.lams ["x"] (S.apps ["+", "n", "x"]))
-            (S.apps [ "cond"
-                    , S.apps ["==", "n", "1"]
-                    , "1"
-                    , S.apps ["f", S.apps ["sum", S.apps ["-", "n", "1"]]]
-                    ])
-          )
-        )
-        (S.apps ["sum", "arg"])
-      )
-    )
-    (S.apps ["main", "42"])
+-- e2 :: S.Exp
+-- e2 =
+--   S.Let "main"
+--     (S.lams ["arg"]
+--       (S.Let "sum"
+--         (S.lams ["n"]
+--           (S.Let "f"
+--             (S.lams ["x"] (S.apps ["+", "n", "x"]))
+--             (S.apps [ "cond"
+--                     , S.apps ["==", "n", "1"]
+--                     , "1"
+--                     , S.apps ["f", S.apps ["sum", S.apps ["-", "n", "1"]]]
+--                     ])
+--           )
+--         )
+--         (S.apps ["sum", "arg"])
+--       )
+--     )
+--     (S.apps ["main", "42"])
 
-{- >>> pretty e2
-let main = \ arg ->
-           let sum = \ n ->
-                     let f = \ x ->
-                             ((+ n) x) in
-                     (((cond ((== n) 1)) 1) (f (sum ((- n) 1)))) in
-           (sum arg) in
-(main 42)
--}
+-- {- >>> pretty e2
+-- let main = \ arg ->
+--            let sum = \ n ->
+--                      let f = \ x ->
+--                              ((+ n) x) in
+--                      (((cond ((== n) 1)) 1) (f (sum ((- n) 1)))) in
+--            (sum arg) in
+-- (main 42)
+-- -}
 
-{- >>> pretty (A.anf e2)
-let main = \ arg ->
-           let sum = \ n ->
-                     let f = \ x ->
-                             let anf#0 = (+ n) in
-                             (anf#0 x) in
-                     let anf#4 = (== n) in
-                     let anf#3 = (anf#4 1) in
-                     let anf#2 = (cond anf#3) in
-                     let anf#1 = (anf#2 1) in
-                     let anf#8 = (- n) in
-                     let anf#7 = (anf#8 1) in
-                     let anf#6 = (sum anf#7) in
-                     let anf#5 = (f anf#6) in
-                     (anf#1 anf#5) in
-           (sum arg) in
-(main 42)
--}
+-- {- >>> pretty (A.anf e2)
+-- let main = \ arg ->
+--            let sum = \ n ->
+--                      let f = \ x ->
+--                              let anf#0 = (+ n) in
+--                              (anf#0 x) in
+--                      let anf#4 = (== n) in
+--                      let anf#3 = (anf#4 1) in
+--                      let anf#2 = (cond anf#3) in
+--                      let anf#1 = (anf#2 1) in
+--                      let anf#8 = (- n) in
+--                      let anf#7 = (anf#8 1) in
+--                      let anf#6 = (sum anf#7) in
+--                      let anf#5 = (f anf#6) in
+--                      (anf#1 anf#5) in
+--            (sum arg) in
+-- (main 42)
+-- -}
 
-{- >>> pretty (ccll (A.anf e2))
-let ccll#2 = \ env x ->
-             let + = env.0 in
-             let n = env.1 in
-             let anf#0 = (+ n) in
-             (anf#0 x) in
-let ccll#1 = \ env n ->
-             let + = env.0 in
-             let - = env.1 in
-             let 1 = env.2 in
-             let == = env.3 in
-             let cond = env.4 in
-             let sum = env.5 in
-             let f = let env = <+, n> in
-                     (ccll#2 env) in
-             let anf#4 = (== n) in
-             let anf#3 = (anf#4 1) in
-             let anf#2 = (cond anf#3) in
-             let anf#1 = (anf#2 1) in
-             let anf#8 = (- n) in
-             let anf#7 = (anf#8 1) in
-             let anf#6 = (sum anf#7) in
-             let anf#5 = (f anf#6) in
-             (anf#1 anf#5) in
-let ccll#0 = \ env arg ->
-             let + = env.0 in
-             let - = env.1 in
-             let 1 = env.2 in
-             let == = env.3 in
-             let cond = env.4 in
-             let sum = env.5 in
-             let sum = let env = <+, -, 1, ==, cond, sum> in
-                       (ccll#1 env) in
-             (sum arg) in
-let main = let env = <+, -, 1, ==, cond, sum> in
-           (ccll#0 env) in
-(main 42)
--}
+-- {- >>> pretty (ccll (A.anf e2))
+-- let ccll#2 = \ env x ->
+--              let + = env.0 in
+--              let n = env.1 in
+--              let anf#0 = (+ n) in
+--              (anf#0 x) in
+-- let ccll#1 = \ env n ->
+--              let + = env.0 in
+--              let - = env.1 in
+--              let 1 = env.2 in
+--              let == = env.3 in
+--              let cond = env.4 in
+--              let sum = env.5 in
+--              let f = let env = <+, n> in
+--                      (ccll#2 env) in
+--              let anf#4 = (== n) in
+--              let anf#3 = (anf#4 1) in
+--              let anf#2 = (cond anf#3) in
+--              let anf#1 = (anf#2 1) in
+--              let anf#8 = (- n) in
+--              let anf#7 = (anf#8 1) in
+--              let anf#6 = (sum anf#7) in
+--              let anf#5 = (f anf#6) in
+--              (anf#1 anf#5) in
+-- let ccll#0 = \ env arg ->
+--              let + = env.0 in
+--              let - = env.1 in
+--              let 1 = env.2 in
+--              let == = env.3 in
+--              let cond = env.4 in
+--              let sum = env.5 in
+--              let sum = let env = <+, -, 1, ==, cond, sum> in
+--                        (ccll#1 env) in
+--              (sum arg) in
+-- let main = let env = <+, -, 1, ==, cond, sum> in
+--            (ccll#0 env) in
+-- (main 42)
+-- -}

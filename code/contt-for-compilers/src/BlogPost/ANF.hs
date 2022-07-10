@@ -5,18 +5,20 @@
 
 module BlogPost.ANF where
 
+import BlogPost.Renaming (Renamable (rename), addRenaming, emptyRenaming, removeBdr, renaming)
 import qualified BlogPost.Source as S
 import BlogPost.Var (Bdr (B), Var (V))
 import Control.Lens (Field1 (..), Identity, makeLenses, over, view, (<<+=))
-import Control.Monad ((<=<))
+import Control.Monad (foldM, forM, forM_, (<=<))
 import Control.Monad.RWS (MonadState (get), MonadWriter (tell), RWST (RWST, runRWST))
-import Control.Monad.Reader (ReaderT (runReaderT))
+import Control.Monad.Reader (ReaderT (ReaderT, runReaderT))
 import Control.Monad.State (StateT (StateT, runStateT), evalStateT, runState)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Cont (ContT (runContT))
 import Control.Monad.Writer (WriterT (WriterT, runWriterT), runWriter)
 import Data.Functor.Identity (Identity (Identity, runIdentity))
 import Data.String (IsString (fromString))
+import Debug.Trace (trace)
 import Prettyprinter (Pretty (pretty), hsep)
 
 data Const
@@ -28,8 +30,12 @@ instance IsString Const where
   fromString = Var . fromString
 
 instance Pretty Const where
-  pretty (Int n) = pretty n
+  pretty (Int i) = pretty i
   pretty (Var v) = pretty v
+
+instance Renamable Const where
+  rename r (Int i) = Int i
+  rename r (Var v) = Var (rename r v)
 
 data Atom
   = App Const Const
@@ -39,6 +45,11 @@ data Atom
 
 instance IsString Atom where
   fromString = Const . fromString
+
+instance Renamable Atom where
+  rename r (App c1 c2) = App (rename r c1) (rename r c2)
+  rename r (Const c) = Const (rename r c)
+  rename r (Lam b e) = Lam b (rename (removeBdr b r) e)
 
 gatherLamsAtom :: Atom -> ([Bdr], Exp)
 gatherLamsAtom (Lam b a) = over _1 (b :) (gatherLamsExp a)
@@ -57,7 +68,7 @@ instance Pretty Atom where
 
 data Exp
   = Halt Atom
-  | Let Bdr Exp Exp
+  | Let Bdr Atom Exp
   deriving (Show)
 
 instance IsString Exp where
@@ -67,21 +78,24 @@ instance Pretty Exp where
   pretty (Halt a) = pretty a
   pretty (Let b e1 e2) = S.prettyLet (pretty b) (pretty e1) (pretty e2)
 
-newtype ANFWriter = ANFWriter {_bindings :: [(Bdr, Exp)]}
-  deriving (Monoid, Semigroup)
+instance Renamable Exp where
+  rename r (Halt a) = Halt (rename r a)
+  rename r (Let b a e) = Let b (rename r a) (rename (removeBdr b r) e)
+
+type LetBinding = (Bdr, Atom)
 
 newtype ANFState = ANFState {_freshCounter :: Int}
 
 makeLenses ''ANFState
 
 newtype ANFM a = ANFM
-  { getANFM :: WriterT ANFWriter (StateT ANFState Identity) a
+  { getANFM :: WriterT [LetBinding] (StateT ANFState Identity) a
   }
   deriving
     ( Applicative,
       Functor,
       Monad,
-      MonadWriter ANFWriter,
+      MonadWriter [LetBinding],
       MonadState ANFState
     )
 
@@ -91,117 +105,56 @@ fresh = do
   let s = "anf#" <> show sId
   return (B s, V s)
 
--- | Runs `ma` but capture its local writer output, returning it, and replacing
--- it with an empty writer for the caller.
-intercept :: ANFM a -> ANFM (a, ANFWriter)
-intercept ma = do
-  (a, w) <- ANFM . lift . runWriterT . getANFM $ ma
-  ANFM $ WriterT (StateT (Identity . (((a, w), mempty),)))
+freshFrom :: Bdr -> ANFM (Bdr, Var)
+freshFrom (B b) = do
+  sId <- freshCounter <<+= 1
+  let s = b <> "#" <> show sId
+  return (B s, V s)
 
-anfToConst :: S.Exp -> ANFM Const
-anfToConst (S.Int i) = return (Int i)
-anfToConst (S.Var v) = return (Var v)
-anfToConst e = do
-  (b, v) <- fresh
-  a <- anfToAtom e
-  tell $ ANFWriter [(b, Halt a)]
-  return (Var v)
+-- Runs `ma` but capture its local writer output, returning it, and replacing it
+-- with an empty writer for the caller.
+intercept :: ANFM a -> ANFM (a, [LetBinding])
+intercept ma = ANFM $
+  WriterT $ do
+    (a, w) <- runWriterT . getANFM $ ma
+    StateT (Identity . (((a, w), mempty),))
 
-bind :: (Bdr, Exp) -> Exp -> Exp
-bind (b, eb) = Let b eb
-
-bindAll :: [(Bdr, Exp)] -> Exp -> Exp
-bindAll = flip (foldr bind)
-
-anfToAtom :: S.Exp -> ANFM Atom
-anfToAtom (S.App e1 e2) = App <$> anfToConst e1 <*> anfToConst e2
-anfToAtom (S.Int i) = return $ Const (Int i)
-anfToAtom (S.Lam b e) = do
-  (e', ANFWriter bindings) <- intercept (anfToExp e)
-  return $ Lam b (bindAll bindings e')
-anfToAtom (S.Let b e1 e2) = do
-  (a1, ANFWriter bs) <- intercept (anfToAtom e1)
-  tell $ ANFWriter [(b, bindAll bs (Halt a1))]
-  anfToAtom e2
-anfToAtom (S.Var v) = return $ Const (Var v)
-
-anfToExp :: S.Exp -> ANFM Exp
-anfToExp e = (Halt <$>) $ anfToAtom e
+bindAll :: [(Bdr, Atom)] -> Exp -> Exp
+bindAll = flip (foldr (uncurry Let))
 
 anf :: S.Exp -> Exp
 anf e =
-  let (e', ANFWriter bindings) =
+  let (a, bs) =
         runIdentity
           . flip evalStateT (ANFState 0)
           . runWriterT
           . getANFM
-          $ anfToExp e
-   in bindAll bindings e'
+          $ anfExp e
+   in bindAll bs (Halt a)
 
-e1 :: S.Exp
-e1 =
-  S.lets
-    [ ("a", S.Int 2),
-      ("b", S.Int 3)
-    ]
-    $ S.apps ["plus", "a", "b"]
+anfConst :: S.Exp -> ANFM Const
+anfConst (S.Int i) = return (Int i)
+anfConst (S.Var v) = return (Var v)
+anfConst e = do
+  (b, v) <- fresh
+  e' <- anfExp e
+  tell [(b, e')]
+  return (Var v)
 
-{- >>> pretty e1
-let a = 2 in
-let b = 3 in
-((plus a) b)
--}
-
-{- >>> pretty $ anf e1
-let a = 2 in
-let b = 3 in
-let anf#0 = (plus a) in
-(anf#0 b)
--}
-
-e2 :: S.Exp
-e2 =
-  S.lets
-    [ ("a", S.Int 5),
-      ("sum", e1)
-    ]
-    $ S.apps ["plus", "a", "sum"]
-
-{- >>> pretty e2
-let a = 5 in
-let sum = let a = 2 in
-          let b = 3 in
-          ((plus a) b) in
-((plus a) sum)
--}
-
-{- >>> pretty $ anf e2
-let a = 5 in
-let sum = let a = 2 in
-          let b = 3 in
-          let anf#0 = (plus a) in
-          (anf#0 b) in
-let anf#1 = (plus a) in
-(anf#1 sum)
--}
-
-e3 :: S.Exp
-e3 =
-  S.lets
-    [("flip", S.lams ["f", "a", "b"] (S.apps ["f", "b", "a"]))]
-    $ S.apps ["flip", "minus", S.Int 1, S.Int 5]
-
-{- >>> pretty e3
-let flip = \ f a b ->
-           ((f b) a) in
-(((flip minus) 1) 5)
--}
-
-{- >>> pretty $ anf e3
-let flip = \ f a b ->
-           let anf#0 = (f b) in
-           (anf#0 a) in
-let anf#2 = (flip minus) in
-let anf#1 = (anf#2 1) in
-(anf#1 5)
--}
+anfExp :: S.Exp -> ANFM Atom
+anfExp (S.App e1 e2) = App <$> anfConst e1 <*> anfConst e2
+anfExp (S.Int i) = return $ Const (Int i)
+anfExp (S.Lam b e) = do
+  (a, bs) <- intercept (anfExp e)
+  return $ Lam b (bindAll bs (Halt a))
+anfExp (S.Let b e1 e2) = do
+  (a1, bs) <- intercept (anfExp e1)
+  r <- foldM sanitize emptyRenaming bs
+  tell [(b, rename r a1)]
+  anfExp (rename r e2)
+  where
+    sanitize r (b, a) = do
+      (b', _) <- freshFrom b
+      tell [(b', rename r a)]
+      return $ addRenaming (b, b') r
+anfExp (S.Var v) = return $ Const (Var v)
