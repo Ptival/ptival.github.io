@@ -106,7 +106,7 @@ let a#1 = 2 in
 let b#2 = 3 in
 let anf#0 = plus a#1 in
 let sum = anf#0 b#2 in
-let anf#3 = plus a#1 in
+let anf#3 = plus a in
 anf#3 sum
 ```
 
