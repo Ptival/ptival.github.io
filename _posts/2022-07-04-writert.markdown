@@ -188,10 +188,10 @@ factor out the work nicely.
 Let's start with `anfConst`, for when we need a constant.  If the expression is
 already fit to be a constant, we can just package it nicely.  But when it is
 **decidedly not** a constant, we need to store it in a fresh variable, and
-*return that variable as a stand-in.  But, we need some code ahead of us to
-*introduce the matching `let`-binding, and that's definitely not doable in a
+return that variable as a stand-in.  But, we need some code ahead of us to
+introduce the matching `let` binding, and that's definitely not doable in a
 `ANF.Const`!  It looks like we'll have to return not only the constant our
-caller expects, but also a possible let-binding.  Let's do just this:
+caller expects, but also a possible `let` binding.  Let's do just this:
 
 ```haskell
 type LetBinding = (Bdr, Atom)
@@ -247,7 +247,7 @@ anfAtom (S.Let b e1 e2) = do
 
 While this works, if we had a much larger syntax, there would be a lot of places
 where all we'd be doing is perform recursive calls, aggregate lists of wanted
-`let`-bindings (e.g. what we do for `S.App` in `anfAtom`), and pass those back
+`let` bindings (e.g. what we do for `S.App` in `anfAtom`), and pass those back
 to our caller.  It's this kind of setup that should make you think about using a
 `Writer` effect.  To reiterate:
 
@@ -258,7 +258,7 @@ different bits of data for our caller.  In our example, they are just lists that
 we append, but the general case can involve other types of aggregation.
 
 Let's use `WriterT` to disentangle our two concerns!  The idea is that anywhere
-in the ANF computation, we can "emit" some let-bindings that are to be created
+in the ANF computation, we can "emit" some `let` bindings that are to be created
 by whomever in our calling context is responsible for capturing them.  We add a
 `Writer` layer to our `ANFM` monad, with some list type to represent those
 binders we accumulate.
@@ -315,8 +315,8 @@ Those bindings might depend on the argument of the function.  It would only be
 fair to lift a binding out if it did not depend on the function argument, and
 even then, we'd need to be careful about shadowing names in the outer context.
 
-It appears necessary to intercept these let-bindings before they bubble too far
-up the expression.  Here, and we choose the easy, conservative approach of
+It appears necessary to intercept these `let` bindings before they bubble too
+far up the expression.  Here, and we choose the easy, conservative approach of
 intercepting bindings before they cross **any** binding site, regardless of
 whether they depend on it.
 
