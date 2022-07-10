@@ -16,7 +16,8 @@ but I think it could be enlightening to beginners or even more advanced users
 who are not used to noticing the situations wherein these abstractions shine.
 
 This post will focus on the "outer" `WriterT` layer, and a follow-up post will
-focus on `ContT`.
+focus on `ContT`.  [Code available
+here](https://github.com/Ptival/ptival.github.io/tree/master/code/contt-for-compilers)
 
 A brief, incomplete primer on administrative normal form
 --------------------------------------------------------
@@ -301,15 +302,13 @@ anfAtom (S.Lam b e) = do
 
 The difference in `anfConst` is that we emit the intent of having the binder `b`
 be bound to `e'`.  We are not realizing this binding, just telling our caller
-that, where appropriate, this binding should be created.
-
-Note that we rely on an implementation of substitution to rename all instances
+that, where appropriate, this binding should be created.  In the `S.Let` case,
+note that we rely on an implementation of substitution to rename all instances
 of `b` to `b'`, so that we can hoist the binding `b'` without risk of
-accidentally shadowing another binding.
-
-In the case of `S.Let` however, something is not quite right.  If we just call
-`anfAtom` on our sub-expression, we will get an atom, but its wanted bindings
-will be passed to our calling context.  This is not correct, do you see why?
+accidentally shadowing another binding.  In the case of `S.Lam` however,
+something is not quite right.  If we just call `anfAtom` on our sub-expression,
+we will get an atom, but its wanted bindings will be passed to our calling
+context.  This is not correct, do you see why?
 
 Those bindings might depend on the argument of the function.  It would only be
 fair to lift a binding out if it did not depend on the function argument, and
