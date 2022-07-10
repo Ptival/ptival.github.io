@@ -75,13 +75,57 @@ or interleaved anywhere, unless our language allows side-effects, in which case
 we'd likely want to produce exactly this output, assuming some left-to-right
 evaluation convention.
 
+Now suppose for the purpose of this post that we want to forbid nested `let`
+expressions in our output, that is, the following input:
+
+```haskell
+let a = 5 in
+let sum = let a = 2 in
+          let b = 3 in
+          plus a b in
+plus a sum
+```
+
+should **not** yield something like:
+
+```haskell
+let a = 5 in
+let sum = let a = 2 in
+          let b = 3 in
+          let anf#0 = plus a in
+          anf#0 b in
+let anf#1 = plus a in
+anf#1 sum
+```
+
+but rather something like, say:
+
+```haskell
+let a = 5 in
+let a#1 = 2 in
+let b#2 = 3 in
+let anf#0 = plus a#1 in
+let sum = anf#0 b#2 in
+let anf#3 = plus a#1 in
+anf#3 sum
+```
+
+That is, we want the right-hand side of any `let` expression to be something we
+consider "atomic": a numeric value, a variable, or a lambda.  Notice how this
+involved lifting out the local bindings for `a` and `b`, which would have
+shadowed the old binding of `a`, had we not performed a renaming substitution.
+
+This is nice because each `let` binding now corresponds to one register
+assignment in the future target language.  Let us attempt to write such a
+transformation.
+
 Implementing ANF
 ----------------
 
 While the `Exp` datatype is capable of representing the output of our ANF phase,
 its type does not represent tightly the effect of the transformation: ideally
 there are certain values that we'd like to no longer exist after this pass, such
-as our initial very-nested application.
+as our initial very-nested application, and nested `let` bindings.
 
 Instead, it can be nice to create a different data type, whose structure
 enforces our intent more precisely:
@@ -91,19 +135,26 @@ data Const
   = Int Int
   | Var Var
 
--- Note: in the attached code, each language lives in its own module, so ANF.Exp
--- does not conflict with Source.Exp
-data Exp
+data Atom
   = App Const Const
   | Const Const
   | Lam Bdr Exp
-  | Let Bdr Exp Exp
+
+-- Note: in the attached code, each language lives in its own module, so ANF.Exp
+-- does not conflict with Source.Exp
+data Exp
+  = Halt Atom
+  | Let Bdr Atom Exp
 ```
 
-For this language, we split the original `Source.Exp` into two, carving out the
-constant expressions.  Only those are now allowed inside of a function
+For this language, we split the original `Source.Exp` into three, carving out
+the constant expressions, the atomic expressions, and the `let` bindings.
+
+Only (syntactic) constant expressions are now allowed inside of a function
 application: this guarantees the absence of nested applications, as they cannot
-be represented in this language!
+be represented in this language!  Likewise, nested `let`s are **not**
+representable, as we only allow `Atom`s to the right of the equal sign in
+`ANF.Exp`.
 
 Let's now try to implement the ANF pass, in the most optimistic, naive way one
 could think of.  Because we will need to generate fresh variables, let's assume
@@ -121,91 +172,84 @@ newtype ANFM a = ANFM { unANFM :: StateT Int Identity a }
 
 -- S is an alias for the original "source" language, for brevity
 anf :: S.Exp -> ANFM ANF.Exp
-anf (S.App e1 e2)   = _
-anf (S.Int i)       = return $ ANF.Const (ANF.Int i)
-anf (S.Lam b e)     = ANF.Lam b <$> anf e
-anf (S.Let b e1 e2) = ANF.Let b <$> anf e1 <*> anf e2
-anf (S.Var v)       = return $ ANF.Const (ANF.Var v)
+anf (S.Int i)       = return $ ANF.Halt $ ANF.Const (ANF.Int i)
+anf (S.Var v)       = return $ ANF.Halt $ ANF.Const (ANF.Var v)
+anf (S.Lam b e)     = ANF.Halt . ANF.Lam b <$> anf e
+anf (S.Let b e1 e2) = ANF.Halt . ANF.Let b <$> _ <*> anf e2
+anf (S.App e1 e2)   = return $ ANF.Halt $ ANF.App _ _
 ```
 
-For most cases, it's a simple matter of translation and recursion.  But what
-should happend for `S.App e1 e2`?  Well, we better produce some `App a b`
-somewhere in our output, but if those expressions are complex, we also expect a
-bunch of let-bindings to be needed.
+Our first roadblocks are in `S.Let` and `S.App`, where we respectively need to
+produce an `Atom` and `Const`s, not `Exp`s.  It looks like it would be a good
+plan to separate a function for when we want `Const`s back, one for when we want
+`Atom`s back, and a last one when we want `Exp`s back.  In fact, those would
+factor out the work nicely.
 
-If we inductively assume that calling `anf e1` works correctly, it ought to
-return some `ANF.Exp` in correct form, likewise for `anf e2`.  But we've gotta
-get some constants to put in the `App` node we produce.  Ignoring for now the
-freshness of binders we introduce for it, we could be doing:
-
-```haskell
-anf (S.App e1 e2) = do
-  (b1, v1) <- fresh   -- assume fresh has type @ANFM (Bdr, Var)@
-  (b2, v2) <- fresh
-  e1' <- anf e1
-  e2' <- anf e2
-  return $ ANF.Let b1 e1' (ANF.Let b2 e2' (ANF.App v1 v2))
-```
-
-which... works!  But let's see how it works on some input:
+Let's start with `anfConst`, for when we need a constant.  If the expression is
+already fit to be a constant, we can just package it nicely.  But when it is
+**decidedly not** a constant, we need to store it in a fresh variable, and
+*return that variable as a stand-in.  But, we need some code ahead of us to
+*introduce the matching `let`-binding, and that's definitely not doable in a
+`ANF.Const`!  It looks like we'll have to return not only the constant our
+caller expects, but also a possible let-binding.  Let's do just this:
 
 ```haskell
--- Input:
-let a = 2 in
-let b = 3 in
-plus a b
--- Output:
-let a = 2 in
-let b = 3 in
-let anf#0 = let anf#2 = plus in
-            let anf#3 = a in
-            a1 a2 in
-let anf#1 = b in
-a1 a2
-```
+type LetBinding = (Bdr, Atom)
 
-It's alright, but, it's a bit sad that we generate bindings that stand for
-existing variables or numeric constants.  Ideally, we'd like `anf` to tell us
-what constant to use for a given expression, but we also need it to let us know
-if there are bindings to be introduced as part of the transformation.
-Additionally, where expressions are allowed in the final syntax tree, we don't
-want to be producing extra redundant bindings.
-
-So we may come up with the following scheme:
-
-```haskell
-anfConst :: S.Exp -> ANFM ([(Bdr, ANF.Exp)], ANF.Const)
-anfConst (S.Int i) = return ([], ANF.Int i)
-anfConst (S.Var v) = return ([], ANF.Var v)
+anfConst :: S.Exp -> ANFM (ANF.Const, Maybe LetBinding)
+anfConst (S.Int i) = return (ANF.Int i, Nothing)
+anfConst (S.Var v) = return (ANF.Var v, Nothing)
 anfConst e = do
   (b, v) <- fresh
-  e' <- anfExp e
-  return ([(b, e')], ANF.Var v)
-
--- This just creates a series of nested @Let@s
-bindAll :: [(Bdr, ANF.Exp)] -> ANF.Exp -> ANF.Exp
-bindAll = flip (foldr (uncurry ANF.Let))
-
-anfExp :: S.Exp -> ANFM ANF.Exp
-anfExp (S.App e1 e2) =
-  (lets1, c1) <- anfConst e1 in
-  (lets2, c2) <- anfConst e2 in
-  return $ bindAll lets1 (bindAll lets2 (ANF.App c1 c2))
-anfExp (S.Int i)       = return $ ANF.Const (ANF.Int i)
-anfExp (S.Lam b e)     = ANF.Lam b <$> anfExp e
-anfExp (S.Let b e1 e2) = Let b <$> anfExp e1 <*> anfExp e2
-anfExp (S.Var v)       = return $ ANF.Const (Var v)
+  a <- anfAtom e
+  return (Var v, (b, a))
 ```
 
-That is, we have two functions that we call appropriately, based on whether we
-need a constant or just an ANF-ed expression, and the function that produces
-constants may also indicate that some let bindings need to bubble up, so to
-speak, and be created at some appropriate location.
+Looks workable, now let's turn our head towards `anfAtom`.  Thinking ahead, for
+`App`, we may receive bindings from either of the operands that we will need to
+pass to our caller, since we're only building atoms and cannot possibly bind
+them here.  So we will need to aggregate potentially multiple `LetBinding`s.  It
+seems like our life will be much easier if we always manipulate them as lists.
+Let's adapt `anfConst` with this realization, and get started on `anfAtom`:
+
+```haskell
+anfConst :: S.Exp -> ANFM (ANF.Const, [LetBinding])
+anfConst (S.Int i) = return (ANF.Int i, [])
+anfConst (S.Var v) = return (ANF.Var v, [])
+anfConst e = do
+  (b, v) <- fresh
+  a <- anfAtom e
+  return (Var v, [(b, a)])
+
+bindAll :: [LetBinding] -> ANF.Exp -> ANF.Exp
+bindAll = flip (foldr (uncurry ANF.Let))
+
+anfAtom :: S.Exp -> ANFM (ANF.Atom, [LetBinding])
+anfAtom (S.App e1 e2) = do
+  (a1, bs1) <- anfConst e1
+  (a2, bs2) <- anfConst e2
+  return (ANF.App a1 a2, bs1 ++ bs2)
+anfAtom (S.Int i) = return (ANF.Const (ANF.Int i), [])
+anfAtom (S.Var v) = return (ANF.Const (ANF.Var v), [])
+anfAtom (S.Lam b e) = do
+  (e', bs) <- anfExp e
+  return (ANF.Lam b (bindAll bs e')), [])
+anfAtom (S.Let b e1 e2) = do
+  (a1, bs) <- anfAtom e1
+  -- Create a fresh binder whose name starts like the old one
+  (b', _) <- freshFrom b
+  -- Add the b' binding, note that here you'd perform a renaming in a1 if your
+  -- let binders were recursive.  Also, appending is unfortunate, but you could
+  -- use a better data structure
+  tell $ bs ++ [(b', a1)]
+  anfAtom (rename (renaming (b, b')) e2)
+```
 
 While this works, if we had a much larger syntax, there would be a lot of places
-where all we'd be doing is perform recursive calls, aggregate lists of lets, and
-pass those back to our caller.  Its this kind of setup that should make you
-think about using a `Writer` effect.  To reiterate:
+where all we'd be doing is perform recursive calls, aggregate lists of wanted
+`let`-bindings (e.g. what we do for `S.App` in `anfAtom`), and pass those back
+to our caller.  It's this kind of setup that should make you think about using a
+`Writer` effect.  To reiterate:
 
 - We're writing out data for someone in our calling context.
 
@@ -220,8 +264,6 @@ by whomever in our calling context is responsible for capturing them.  We add a
 binders we accumulate.
 
 ```haskell
-type LetBinding = (Bdr, Exp)
-
 -- Updated definition!
 newtype ANFM a = ANFM { unANFM :: WriterT [LetBinding] (StateT Int Identity) a }
   deriving
@@ -235,49 +277,48 @@ Here's what becomes of `anfConst` and `anfExp` in this new setting:
 
 ```haskell
 anfConst :: S.Exp -> ANFM ANF.Const
-anfConst (S.Int i) = return (ANF.Int i)
-anfConst (S.Var v) = return (ANF.Var v)
+anfConst (S.Int i) = return (ANF.Int i) -- No need to talk about bindings here!
+anfConst (S.Var v) = return (ANF.Var v) -- No need to talk about bindings here!
 anfConst e = do
   (b, v) <- fresh
   e' <- anfExp e
-  tell [(b, e')]
+  tell [(b, e')] -- tell our calling context they should bind b to e'
   return (ANF.Var v)
 
-anfExp :: S.Exp -> ANFM ANF.Exp
-anfExp (S.App e1 e2) = ANF.App <$> anfConst e1 <*> andConst e2
-anfExp (S.Int i) = return $ ANF.Const (ANF.Int i)
-anfExp (S.Lam b e) = do
-  (e', bs) <- intercept (anfExp e)
-  return $ Lam b (bindAll bs e')
-anfExp (S.Let b e1 e2) = do
-  e2' <- anfExp e2
-  (e2', bs) <- intercept (anfExp e1)
-  return $ ANF.Let b e1' (bindAll bs e2')
-anfExp (S.Var v) = return $ ANF.Const (ANF.Var v)
-
-anf :: S.Exp -> ANF.Exp
-anf e =
-  let (e', bs) =
-        runIdentity
-          . flip evalStateT (ANFState 0)
-          . runWriterT
-          . unANFM
-          $ anfExp e
-   in bindAll bs e'
+anfAtom :: S.Exp -> ANFM ANF.Atom
+-- Here we don't even mention the bindings that get aggregated!
+anfAtom (S.App e1 e2) = ANF.App <$> anfConst e1 <*> anfConst e2
+anfAtom (S.Int i) = return $ ANF.Const (ANF.Int i)
+anfAtom (S.Var v) = return $ ANF.Const (ANF.Var v)
+anfAtom (S.Let b e1 e2) = do
+  a1 <- anfAtom e1
+  (b', _) <- freshFrom b
+  tell [(b', a1)] -- Here you'd rename in `a1` if lets were recursive
+  anfAtom (rename (renaming (b, b')) e2)
+anfAtom (S.Lam b e) = do
+  _ -- uh hoh!
 ```
 
 The difference in `anfConst` is that we emit the intent of having the binder `b`
 be bound to `e'`.  We are not realizing this binding, just telling our caller
 that, where appropriate, this binding should be created.
 
-There are two places where it is necessary to intercept let-bindings before they
-bubble too far up the expression.  Simply, bindings should not bubble up past
-other bindings, since they might be depending on those.  There are subtleties
-with recursive bindings that we skip here, and we choose the easy, conservative
-approach of intercepting bindings before they cross **any** binding site,
-regardless of whether they depend on it.  This happens when bindings would
-potentially bubble out of a lambda's body, or when they would bubble from the
-body of a let expression to its outer expression.
+Note that we rely on an implementation of substitution to rename all instances
+of `b` to `b'`, so that we can hoist the binding `b'` without risk of
+accidentally shadowing another binding.
+
+In the case of `S.Let` however, something is not quite right.  If we just call
+`anfAtom` on our sub-expression, we will get an atom, but its wanted bindings
+will be passed to our calling context.  This is not correct, do you see why?
+
+Those bindings might depend on the argument of the function.  It would only be
+fair to lift a binding out if it did not depend on the function argument, and
+even then, we'd need to be careful about shadowing names in the outer context.
+
+It appears necessary to intercept these let-bindings before they bubble too far
+up the expression.  Here, and we choose the easy, conservative approach of
+intercepting bindings before they cross **any** binding site, regardless of
+whether they depend on it.
 
 We will need to use an operation that is not part of the `MonadWriter` type
 class, but is very useful here.  It's a bit like
@@ -295,14 +336,44 @@ intercept ma = WriterT $ do
 ```
 
 I don't think it's quite possible to implement it for `MonadWriter` without
-support in the class itself.
+support in the class itself.  Here is its specialized version to our `ANFM`
+monad:
 
 ```haskell
--- As we implement it here for `ANFM`.
 intercept :: ANFM a -> ANFM (a, [LetBinding])
 intercept ma = ANFM $ WriterT $ do
   (a, bs) <- runWriterT (unANFM ma)
   pure ((a, bs), mempty)
+```
+
+This lets us write the final case for `anfAtom`, and we can finish thr program:
+
+```haskell
+anfAtom :: S.Exp -> ANFM ANF.Atom
+anfAtom (S.App e1 e2) = ANF.App <$> anfConst e1 <*> anfConst e2
+anfAtom (S.Int i) = return $ ANF.Const (ANF.Int i)
+anfAtom (S.Var v) = return $ ANF.Const (ANF.Var v)
+anfAtom (S.Let b e1 e2) = do
+  a1 <- anfAtom e1
+  (b', _) <- freshFrom b
+  tell [(b', a1)]
+  anfAtom (rename (renaming (b, b')) e2)
+anfAtom (S.Lam b e) = do
+  (e', bs) <- intercept (anfExp e)
+  return $ ANF.Lam b (bindAll bs e')
+
+anfExp :: S.Exp -> ANFM ANF.Exp
+anfExp e = ANF.Halt <$> anfAtom e
+
+anf :: S.Exp -> ANF.Exp
+anf e =
+  let (e', bs) =
+        runIdentity
+          . flip evalStateT (ANFState 0)
+          . runWriterT
+          . getANFM
+          $ anfExp e
+   in bindAll bs e'
 ```
 
 And that's it!  We abstracted away the tedium of propagation and aggregation of
@@ -311,13 +382,38 @@ places that need to "intercept" them just do so and create them.  Finally, our
 top-level `anf` function listens to and bind those `LetBinding`s that have
 bubbled their way to the very top without interception.
 
-A last, harder example, for our conclusion, this input:
+To conclude, here  are two sample input/output pairs to see how this works:
+
+```haskell
+let a = 5 in
+let sum = let a = 2 in
+          let b = 3 in
+          plus a b in
+plus a sum
+```
+
+becomes:
+
+```haskell
+let a#0 = 5 in
+let a#1 = 2 in
+let b#2 = 3 in
+let anf#3 = plus a#1 in
+let sum#4 = anf#3 b#2 in
+let anf#5 = plus a#0 in
+anf#5 sum#4
+```
+
+Note how the first `a` gets renamed `a#0`, even though that was not particularly
+useful (again: we conservatively rename all lifted binders).
+
+And the following:
 
 ```haskell
 let main = \ arg ->
            let sum = \ n ->
                      let f = \ x ->
-                             + n x in
+                             plus n x in
                      cond (eq n 1) 1 (f (sum (minus n 1))) in
            sum arg in
 main 42
@@ -326,21 +422,20 @@ main 42
 becomes:
 
 ```haskell
-let main = \ arg ->
-           let sum = \ n ->
-                     let f = \ x ->
-                             let anf#0 = + n in
-                             anf#0 x in
-                     let anf#4 = eq n in
-                     let anf#3 = anf#4 1 in
-                     let anf#2 = cond anf#3 in
-                     let anf#1 = anf#2 1 in
-                     let anf#8 = minus n in
-                     let anf#7 = anf#8 1 in
-                     let anf#6 = sum anf#7 in
-                     let anf#5 = f anf#6 in
-                     anf#1 anf#5 in
-           sum arg in
-main 42
-
+let main#11 = \ arg ->
+              let sum#10 = \ n ->
+                           let f#1 = \ x ->
+                                     let anf#0 = plus n in
+                                     anf#0 x in
+                           let anf#5 = eq n in
+                           let anf#4 = anf#5 1 in
+                           let anf#3 = cond anf#4 in
+                           let anf#2 = anf#3 1 in
+                           let anf#9 = minus n in
+                           let anf#8 = anf#9 1 in
+                           let anf#7 = sum anf#8 in
+                           let anf#6 = f#1 anf#7 in
+                           anf#2 anf#6 in
+              sum#10 arg in
+main#11 42
 ```

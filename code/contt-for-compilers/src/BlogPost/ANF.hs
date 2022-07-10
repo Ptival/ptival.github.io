@@ -122,39 +122,36 @@ intercept ma = ANFM $
 bindAll :: [(Bdr, Atom)] -> Exp -> Exp
 bindAll = flip (foldr (uncurry Let))
 
-anf :: S.Exp -> Exp
-anf e =
-  let (a, bs) =
-        runIdentity
-          . flip evalStateT (ANFState 0)
-          . runWriterT
-          . getANFM
-          $ anfExp e
-   in bindAll bs (Halt a)
-
 anfConst :: S.Exp -> ANFM Const
 anfConst (S.Int i) = return (Int i)
 anfConst (S.Var v) = return (Var v)
 anfConst e = do
   (b, v) <- fresh
-  e' <- anfExp e
+  e' <- anfAtom e
   tell [(b, e')]
   return (Var v)
 
-anfExp :: S.Exp -> ANFM Atom
-anfExp (S.App e1 e2) = App <$> anfConst e1 <*> anfConst e2
-anfExp (S.Int i) = return $ Const (Int i)
-anfExp (S.Lam b e) = do
-  (a, bs) <- intercept (anfExp e)
-  return $ Lam b (bindAll bs (Halt a))
-anfExp (S.Let b e1 e2) = do
-  (a1, bs) <- intercept (anfExp e1)
-  r <- foldM sanitize emptyRenaming bs
-  tell [(b, rename r a1)]
-  anfExp (rename r e2)
-  where
-    sanitize r (b, a) = do
-      (b', _) <- freshFrom b
-      tell [(b', rename r a)]
-      return $ addRenaming (b, b') r
-anfExp (S.Var v) = return $ Const (Var v)
+anfAtom :: S.Exp -> ANFM Atom
+anfAtom (S.App e1 e2) = App <$> anfConst e1 <*> anfConst e2
+anfAtom (S.Int i) = return $ Const (Int i)
+anfAtom (S.Var v) = return $ Const (Var v)
+anfAtom (S.Lam b e) = do
+  (e', bs) <- intercept (anfExp e)
+  return $ Lam b (bindAll bs e')
+anfAtom (S.Let b e1 e2) = do
+  a1 <- anfAtom e1
+  (b', _) <- freshFrom b
+  tell [(b', a1)] -- Here you'd rename in `a1` if lets were recursive
+  anfAtom (rename (renaming (b, b')) e2)
+
+anfExp :: S.Exp -> ANFM Exp
+anfExp e = Halt <$> anfAtom e
+
+anf :: S.Exp -> Exp
+anf =
+  uncurry (flip bindAll)
+    . runIdentity
+    . flip evalStateT (ANFState 0)
+    . runWriterT
+    . getANFM
+    . anfExp

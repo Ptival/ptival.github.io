@@ -32,10 +32,10 @@ let b = 3 in
 -}
 
 {- >>> pretty $ ANF.anf e1
-let a = 2 in
-let b = 3 in
-let anf#0 = (plus a) in
-(anf#0 b)
+let a#0 = 2 in
+let b#1 = 3 in
+let anf#2 = (plus a#0) in
+(anf#2 b#1)
 -}
 
 e2 :: S.Exp
@@ -55,13 +55,13 @@ let sum = let a = 2 in
 -}
 
 {- >>> pretty $ ANF.anf e2
-let a = 5 in
+let a#0 = 5 in
 let a#1 = 2 in
 let b#2 = 3 in
-let anf#0#3 = (plus a#1) in
-let sum = (anf#0#3 b#2) in
-let anf#4 = (plus a#1) in
-(anf#4 sum)
+let anf#3 = (plus a#1) in
+let sum#4 = (anf#3 b#2) in
+let anf#5 = (plus a#0) in
+(anf#5 sum#4)
 -}
 
 e3 :: S.Exp
@@ -76,11 +76,13 @@ let flip = \ f a b ->
 (((flip minus) 1) 5)
 -}
 
-{- >>> pretty $ ANF.anf e4
-let f#0 = \ x ->
-          x in
-let main = (f#0 1) in
-main
+{- >>> pretty $ ANF.anf e3
+let flip#1 = \ f a b ->
+             let anf#0 = (f b) in
+             (anf#0 a) in
+let anf#3 = (flip#1 minus) in
+let anf#2 = (anf#3 1) in
+(anf#2 5)
 -}
 
 e4 :: S.Exp
@@ -104,8 +106,8 @@ main
 {- >>> pretty $ ANF.anf e4
 let f#0 = \ x ->
           x in
-let main = (f#0 1) in
-main
+let main#1 = (f#0 1) in
+main#1
 -}
 
 e5 :: S.Exp
@@ -134,12 +136,12 @@ e6 =
                 ["n"]
                 ( S.Let
                     "f"
-                    (S.lams ["x"] (S.apps ["+", "n", "x"]))
+                    (S.lams ["x"] (S.apps ["plus", "n", "x"]))
                     ( S.apps
                         [ "cond",
-                          S.apps ["==", "n", "1"],
+                          S.apps ["eq", "n", "1"],
                           "1",
-                          S.apps ["f", S.apps ["sum", S.apps ["-", "n", "1"]]]
+                          S.apps ["f", S.apps ["sum", S.apps ["minus", "n", "1"]]]
                         ]
                     )
                 )
@@ -149,35 +151,31 @@ e6 =
     )
     (S.apps ["main", "42"])
 
-e7 :: S.Exp
-e7 =
-  S.Let "main" "boop" (S.apps ["+", "1", S.Let "bop" "zoop" "schmoop"])
-
 {- >>> pretty e6
 let main = \ arg ->
            let sum = \ n ->
                      let f = \ x ->
-                             ((+ n) x) in
-                     (((cond ((== n) 1)) 1) (f (sum ((- n) 1)))) in
+                             ((plus n) x) in
+                     (((cond ((eq n) 1)) 1) (f (sum ((minus n) 1)))) in
            (sum arg) in
 (main 42)
 -}
 
 {- >>> pretty $ ANF.anf e6
-let main = \ arg ->
-           let sum = \ n ->
-                     let f = \ x ->
-                             let anf#0 = (+ n) in
-                             (anf#0 x) in
-                     let anf#4 = (== n) in
-                     let anf#3 = (anf#4 1) in
-                     let anf#2 = (cond anf#3) in
-                     let anf#1 = (anf#2 1) in
-                     let anf#8 = (- n) in
-                     let anf#7 = (anf#8 1) in
-                     let anf#6 = (sum anf#7) in
-                     let anf#5 = (f anf#6) in
-                     (anf#1 anf#5) in
-           (sum arg) in
-(main 42)
+let main#11 = \ arg ->
+              let sum#10 = \ n ->
+                           let f#1 = \ x ->
+                                     let anf#0 = (plus n) in
+                                     (anf#0 x) in
+                           let anf#5 = (eq n) in
+                           let anf#4 = (anf#5 1) in
+                           let anf#3 = (cond anf#4) in
+                           let anf#2 = (anf#3 1) in
+                           let anf#9 = (minus n) in
+                           let anf#8 = (anf#9 1) in
+                           let anf#7 = (sum anf#8) in
+                           let anf#6 = (f#1 anf#7) in
+                           (anf#2 anf#6) in
+              (sum#10 arg) in
+(main#11 42)
 -}
