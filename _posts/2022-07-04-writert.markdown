@@ -100,8 +100,8 @@ data Exp
   | Let Bdr Exp Exp
 ```
 
-For this language, we splits the original `Source.Exp` into two, carving out
-the constant expressions.  Only those are now allowed inside of a function
+For this language, we split the original `Source.Exp` into two, carving out the
+constant expressions.  Only those are now allowed inside of a function
 application: this guarantees the absence of nested applications, as they cannot
 be represented in this language!
 
