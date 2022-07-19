@@ -33,7 +33,7 @@ sum of functors: `Boolean + Natural` is a compound language made of the two
 features `Boolean`, and `Natural`.
 
 We also went through the trouble of defining a type-level fixed point operator,
-allowing us to close and tie the know for a given extensible language, turning
+allowing us to close and tie the knot for a given extensible language, turning
 it into a proper concrete language.  Our final candidate for this operator was:
 
 {% highlight coq %}
