@@ -345,7 +345,7 @@ intercept ma = ANFM $ WriterT $ do
   pure ((a, bs), mempty)
 ```
 
-This lets us write the final case for `anfAtom`, and we can finish thr program:
+This lets us write the final case for `anfAtom`, and we can finish the program:
 
 ```haskell
 anfAtom :: S.Exp -> ANFM ANF.Atom
