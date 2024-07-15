@@ -44,7 +44,7 @@ have one expression be:
 -- syntactically:
 (v1 (v2 (v3 v4))) (v5 v6)
 -- or as Exp:
-App (App (App v1) (App v2 (App v3 v4))) (App v5 v6)
+App (App v1 (App v2 (App v3 v4))) (App v5 v6)
 ```
 
 Those are a lot of function calls!  In "administrative normal form" (often
